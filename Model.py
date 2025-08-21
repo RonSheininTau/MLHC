@@ -2,16 +2,16 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATv2Conv
+from torch_geometric.nn import GATv2Conv,TransformerConv
 from tqdm import tqdm
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-#DEVICE = torch.device('cpu')  # For testing purposes, use CPU
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 
 class GraphGRUMortalityModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, n1_gat_layers, n2_gru_layers, X_core, core_padding_mask,
-                 num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_falg=True):
+                 num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
         """
         Mortality prediction model with Graph Attention + GRU layers
         
@@ -35,18 +35,18 @@ class GraphGRUMortalityModel(nn.Module):
         self.core_padding_mask = core_padding_mask.to(DEVICE)
         self.seq_len = seq_len
         self.num_heads = num_heads
-        self.gnn_flag = gnn_falg
+        self.gnn_flag = gnn_flag
         
+        self.notes_layer = nn.Linear(768, hidden_dim).to(DEVICE) 
         self.gat_layers = nn.ModuleList().to(DEVICE)
         
-        
         self.gat_layers.append(
-            GATv2Conv(input_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
+            TransformerConv(input_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
         )
         
         for _ in range(n1_gat_layers - 1):
             self.gat_layers.append(
-                GATv2Conv(hidden_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
+                TransformerConv(hidden_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
             )
         
         if self.gnn_flag:
@@ -54,7 +54,16 @@ class GraphGRUMortalityModel(nn.Module):
         else:
             self.gru = nn.GRU(input_dim, hidden_dim, n2_gru_layers, batch_first=True, dropout=dropout)
         
-        self.classifier = nn.Linear(hidden_dim, 1).to(DEVICE)
+        self.classifier = nn.Sequential(
+            nn.Linear(4*hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+        
         self.dropout = nn.Dropout(dropout).to(DEVICE)
         self.k = k
 
@@ -65,8 +74,6 @@ class GraphGRUMortalityModel(nn.Module):
             if isinstance(layer, GATv2Conv):
                 nn.init.xavier_uniform_(layer.lin_l.weight)
                 nn.init.xavier_uniform_(layer.lin_r.weight) 
-        nn.init.xavier_uniform_(self.classifier.weight) 
-        nn.init.constant_(self.classifier.bias, 0.0)
         nn.init.xavier_uniform_(self.gru.weight_ih_l0)
         nn.init.xavier_uniform_(self.gru.weight_hh_l0)
         nn.init.constant_(self.gru.bias_ih_l0, 0.0)
@@ -74,7 +81,7 @@ class GraphGRUMortalityModel(nn.Module):
         
   
         
-    def forward(self, x ,padding_mask, edge_index):
+    def forward(self, x ,padding_mask, edge_index, nots):
         """
         Forward pass
         
@@ -99,7 +106,6 @@ class GraphGRUMortalityModel(nn.Module):
             # Apply GAT layers
             for gat_layer in self.gat_layers:
                 graph_input = F.relu(gat_layer(graph_input, edge_index))
-                # graph_input = self.dropout(graph_input)
             
             # Reshape back to sequence format: (total_patients, seq_len, hidden_dim)
             graph_output = graph_input.view(total_patients, self.seq_len, -1)
@@ -120,11 +126,18 @@ class GraphGRUMortalityModel(nn.Module):
         # Unpack sequences
         #gru_output, _ = pad_packed_sequence(gru_output, batch_first=True, total_length=self.seq_len)
 
-
+        mask_index = padding_mask.sum(dim=1).long() - 1  # Get the last valid index for each sequence
+        mask_expanded = padding_mask.unsqueeze(-1)    
         gru_output, _ = self.gru(batch_output)
-        # Apply classifier
-        predictions = self.classifier(gru_output)  # (batch_size, seq_len, 1)
-        
+        out = torch.cat([
+            gru_output[torch.arange(gru_output.size(0)), mask_index, :],
+            (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
+            (gru_output * mask_expanded).max(dim=1)[0]
+        ], dim=-1) 
+        nots = F.relu(self.notes_layer(nots))
+        X_concat = torch.cat([out, nots], dim=-1)  # (batch_size, seq_len, 2*hidden_dim)
+        predictions = self.classifier(X_concat)  # (batch_size, 1)
+
         return predictions.squeeze(-1)  # (batch_size, seq_len)
     
     
@@ -139,7 +152,7 @@ class GraphGRUMortalityModel(nn.Module):
         self.train()
         optim = torch.optim.Adam(self.parameters(), lr=learning_rate)
         best_validation_accuracy = - float('inf')
-        targets = datasets['train'].y
+        targets = datasets['train'].y[:,0] # Get the max target for each patien
         pos_weight = (targets == 0).sum() / (targets == 1).sum()  # Adjust pos_weight as needed
         print(f'Pos weight: {pos_weight:.4f}')
 
@@ -147,14 +160,13 @@ class GraphGRUMortalityModel(nn.Module):
         for epoch in range(epochs):
             print(f'Starting epoch {epoch + 1}/{epochs}')
             total = 0
-            for x, y, padding_mask in tqdm(dataloaders['train']):
+            for x, y, padding_mask, idx, notes in tqdm(dataloaders['train']):
                 optim.zero_grad()
-                x, padding_mask, y = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE)
-                edge_index = datasets['train'].build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index)
-                loss = self.masked_bce_loss(
-                    predictions, y, padding_mask, pos_weight=pos_weight * pos_lambda
-                )
+
+                x, padding_mask, y, notes = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE)
+                edge_index = datasets['train'].get_edge_index(x, padding_mask, idx).to(DEVICE)
+                predictions = self.forward(x, padding_mask, edge_index, notes)
+                loss = nn.BCEWithLogitsLoss(reduction='mean', pos_weight=pos_weight)(predictions, y[:, 0])
                 #loss = F.binary_cross_entropy_with_logits(predictions.view(-1), y.view(-1))
                 loss.backward()
                 optim.step()
@@ -177,15 +189,19 @@ class GraphGRUMortalityModel(nn.Module):
         with torch.no_grad():
             all_true_labels = []
             all_predicted_labels = []
-            for x, y, padding_mask in dataloader:
-                x, padding_mask, y = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE)
-                edge_index = dataset.build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index)
-                all_true_labels.extend(y.cpu().numpy().flatten())
+            for x, y, padding_mask, idx, notes in tqdm(dataloader):
+                x, padding_mask, y, notes = x.to(DEVICE), padding_mask.to(DEVICE), y[:,0].to(DEVICE), notes.to(DEVICE)
+                # edge_index = dataset.build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
+                edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
+                predictions = self.forward(x, padding_mask, edge_index, notes)
+                all_true_labels.extend(y.cpu().numpy())
                 all_predicted_labels.extend(torch.sigmoid(predictions).cpu().numpy().flatten())
                 predicted_labels = (torch.sigmoid(predictions) > 0.5).float()
                 correct += (predicted_labels == y).sum().item()
-                total += y.numel()
+                total += y.shape[0]
         accuracy = correct / total if total > 0 else 0
         self.train()
         return accuracy, roc_auc_score(all_true_labels, all_predicted_labels), average_precision_score(all_true_labels, all_predicted_labels)
+
+
+    
