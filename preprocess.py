@@ -378,6 +378,27 @@ def load_notes_embeddings(merged, path='data/notes_with_embeddings.pkl'):
     return notes_df
 
 
+def process_bios(merged, path='data/bios.csv', threshold=240):
+    bios = pd.read_csv(path)
+    bios = bios.loc[bios.hadm_id.isin(merged.hadm_id) & bios.subject_id.isin(merged.subject_id)]
+    item_counts = bios[["subject_id", "org_itemid"]].drop_duplicates()["org_itemid"].value_counts()
+    valid_items = item_counts[item_counts > 240].index
+    bios_filtered = bios[bios["org_itemid"].isin(valid_items)]
+    bios_merge = merged[['subject_id', 'hadm_id']].drop_duplicates().merge(
+        bios_filtered,
+        on=['subject_id', 'hadm_id'],
+        how='left'
+    ).fillna("Nonn")
+
+    bios_onehot = pd.get_dummies(bios_merge, columns=['org_itemid'], prefix='org')
+    groupby_cols = ['subject_id', 'hadm_id']
+    onehot_cols = [col for col in bios_onehot.columns if col.startswith('org_')]
+    bios_table = bios_onehot.groupby(groupby_cols)[onehot_cols].sum().reset_index().drop("hadm_id", axis=1).set_index("subject_id")
+
+    return bios_table
+
+
+
 def generate_series_data(df, group_col="subject_id", maxlen=18):
   grouped = df.groupby(group_col)
   subject_sequences = [group.values[:, 1:] for _, group in grouped]
@@ -411,6 +432,15 @@ def preprocess_pipeline(path=r'./data'):
     X_train = X_train[~X_train['subject_id'].isin(selected_subjects)]
     y_train = y_train[~y_train['subject_id'].isin(selected_subjects)]
 
+
+
+
+    bio_df = process_bios(merged, path=os.path.join(path, 'bios.csv'), threshold=240)
+    bio_train = bio_df.loc[X_train['subject_id'].drop_duplicates()]
+    bio_val = bio_df.loc[X_val['subject_id'].drop_duplicates()]
+    bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()]
+
+
     padded_tensor_train, padding_mask_train = generate_series_data(X_train, group_col="subject_id", maxlen=18)
     padded_tensor_core, padding_mask_core = generate_series_data(X_core, group_col="subject_id", maxlen=18)
     padded_tensor_val, padding_mask_val = generate_series_data(X_val, group_col="subject_id", maxlen=18)
@@ -440,7 +470,10 @@ def preprocess_pipeline(path=r'./data'):
         'padded_tensor_test': padded_tensor_test,
         'padding_mask_test': padding_mask_test,
         'padded_tensor_core': padded_tensor_core,
-        'padding_mask_core': padding_mask_core
+        'padding_mask_core': padding_mask_core,
+        'bio_train': bio_train,
+        'bio_val': bio_val,
+        'bio_test': bio_test,
     }
 
 
