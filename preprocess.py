@@ -404,6 +404,25 @@ def process_bios(merged, path='data/bios.csv', threshold=240):
 
     return bios_table
 
+def process_prescriptions(merged, path='data/prescriptions.csv', threshold=240):
+    prescriptions = pd.read_csv(path, index_col=0)
+    prescriptions = prescriptions.loc[prescriptions.hadm_id.isin(merged.hadm_id) & prescriptions.subject_id.isin(merged.subject_id)]
+    item_counts = prescriptions[["subject_id", "drug"]].drop_duplicates()["drug"].value_counts()
+    valid_items = item_counts[item_counts > threshold].index
+    prescriptions_filtered = prescriptions[prescriptions["drug"].isin(valid_items)][['subject_id', "hadm_id", 'drug']].drop_duplicates()
+    prescriptions_merge = merged[['subject_id', 'hadm_id']].drop_duplicates().merge(
+            prescriptions_filtered,
+            on=['subject_id', 'hadm_id'],
+            how='left'
+        ).fillna("Nonn")
+
+    prescriptions_onehot = pd.get_dummies(prescriptions_merge, columns=['drug'], prefix='drug')
+    groupby_cols = ['subject_id', 'hadm_id']
+    onehot_cols = [col for col in prescriptions_onehot.columns if col.startswith('drug_')]
+    prescriptions_table = prescriptions_onehot.groupby(groupby_cols)[onehot_cols].sum().reset_index().drop("hadm_id", axis=1).set_index("subject_id")
+
+
+    return prescriptions_table
 
 
 def generate_series_data(df, group_col="subject_id", maxlen=18):
@@ -442,11 +461,15 @@ def preprocess_pipeline(path=r'./data'):
 
 
 
+    prescriptions_table = process_prescriptions(merged, path=os.path.join(path, 'prescriptions.csv'), threshold=240)
+    pre_train = prescriptions_table.loc[X_train['subject_id'].drop_duplicates()]
+    pre_val = prescriptions_table.loc[X_val['subject_id'].drop_duplicates()]
+    pre_test = prescriptions_table.loc[X_test['subject_id'].drop_duplicates()]
+
     bio_df = process_bios(merged, path=os.path.join(path, 'bios.csv'), threshold=240)
     bio_train = bio_df.loc[X_train['subject_id'].drop_duplicates()]
     bio_val = bio_df.loc[X_val['subject_id'].drop_duplicates()]
-    bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()
-    ]
+    bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()]
 
 
     padded_tensor_train, padding_mask_train = generate_series_data(X_train, group_col="subject_id", maxlen=18)
@@ -482,6 +505,9 @@ def preprocess_pipeline(path=r'./data'):
         'bio_train': bio_train,
         'bio_val': bio_val,
         'bio_test': bio_test,
+        'prescriptions_train': pre_train,
+        'prescriptions_val': pre_val,
+        'prescriptions_test': pre_test,
     }
 
 

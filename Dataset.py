@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 class PatientDataset(Dataset):
-    def __init__(self, X, y, core, padding_mask, padding_mask_core, notes, k=5):
+    def __init__(self, X, y, core, padding_mask, padding_mask_core, notes, bios, pres, k=5):
         self.core = core
         self.X = X
         self.y = y
@@ -9,6 +9,8 @@ class PatientDataset(Dataset):
         self.padding_mask_core = padding_mask_core
         self.k = k
         self.notes = notes
+        self.bios = bios
+        self.prescriptions = pres
         self.node_to_neighbors = self.build_knn_graph(X, core, padding_mask, padding_mask_core, k=k)
 
 
@@ -16,7 +18,7 @@ class PatientDataset(Dataset):
         return len(self.X)
     
     def __getitem__(self, idx):
-        return self.X[idx], self.y[idx], self.padding_mask[idx], idx, self.notes[idx]
+        return self.X[idx], self.y[idx], self.padding_mask[idx], idx, self.notes[idx], self.bios[idx], self.prescriptions[idx]
 
 
     def get_edge_index(self, batch, padding_mask_batch, batch_indices):

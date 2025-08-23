@@ -12,7 +12,7 @@ NOTE_DIM = 768
 
 class GraphGRUMortalityModel(nn.Module):
     def __init__(self, input_dim, hidden_dim,  n1_gat_layers, n2_gru_layers, X_core, core_padding_mask,
-                 num_of_bios, bios_hidden_dim=None, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
+                 num_of_bios, num_prescriptions, bios_hidden_dim=None, pres_hidden_dim=None, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
         """
         Mortality prediction model with Graph Attention + GRU layers
         
@@ -38,10 +38,13 @@ class GraphGRUMortalityModel(nn.Module):
         self.num_heads = num_heads
         self.gnn_flag = gnn_flag
         self.num_of_bios = num_of_bios
+        self.num_prescriptions = num_prescriptions
         self.bios_hidden_dim = bios_hidden_dim if bios_hidden_dim is not None else hidden_dim
+        self.pres_hidden_dim = pres_hidden_dim if pres_hidden_dim is not None else hidden_dim
         
         self.notes_layer = nn.Linear(NOTE_DIM, hidden_dim).to(DEVICE) 
         self.bios_layer = nn.Linear(num_of_bios, self.bios_hidden_dim).to(DEVICE)
+        self.pres_layer = nn.EmbeddingBag(num_prescriptions, self.pres_hidden_dim, mode='mean').to(DEVICE)
         self.gat_layers = nn.ModuleList().to(DEVICE)
         
         self.gat_layers.append(
@@ -59,7 +62,7 @@ class GraphGRUMortalityModel(nn.Module):
             self.gru = nn.GRU(input_dim, hidden_dim, n2_gru_layers, batch_first=True, dropout=dropout)
         
         self.classifier_mort = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -69,7 +72,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_re = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -79,7 +82,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_pro = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -103,10 +106,30 @@ class GraphGRUMortalityModel(nn.Module):
         nn.init.xavier_uniform_(self.gru.weight_hh_l0)
         nn.init.constant_(self.gru.bias_ih_l0, 0.0)
         nn.init.constant_(self.gru.bias_hh_l0, 0.0)
+
+    @staticmethod
+    def collect_bags(batch):
+        """
+        batch: list of (subject_id, LongTensor[Ni])
+        returns:
+        subject_ids: LongTensor[B]
+        drug_ids:    LongTensor[sum(Ni)]
+        offsets:     LongTensor[B]  (start index of each bag in drug_ids)
+        """
+        subject_ids, bags = zip(*batch)
+        lens = [len(b) for b in bags]
+        offsets = torch.zeros(len(bags), dtype=torch.long)
+        if lens:
+            offsets[1:] = torch.tensor(lens[:-1]).cumsum(dim=0)
+            drug_ids = torch.cat(bags).to(torch.long) if sum(lens) > 0 else torch.empty(0, dtype=torch.long)
+        else:
+            drug_ids = torch.empty(0, dtype=torch.long)
+        return torch.tensor(subject_ids, dtype=torch.long), drug_ids, offsets
         
+
   
         
-    def forward(self, x ,padding_mask, edge_index, nots, bios):
+    def forward(self, x ,padding_mask, edge_index, nots, bios, prescriptions):
         """
         Forward pass
         
@@ -164,8 +187,9 @@ class GraphGRUMortalityModel(nn.Module):
 
         nots = F.relu(self.notes_layer(nots))
         bios = F.relu(self.bios_layer(bios))
-
-        X_concat = torch.cat([out, nots, bios], dim=-1)  # (batch_size, seq_len, 2*hidden_dim)
+        _, drug_ids, offsets = self.collect_bags(list(enumerate(prescriptions)))
+        pres = F.relu(self.pres_layer(drug_ids.to(DEVICE), offsets.to(DEVICE)))
+        X_concat = torch.cat([out, nots, bios, pres], dim=-1)  # (batch_size, seq_len, 2*hidden_dim)
         predictions_mort = self.classifier_mort(X_concat)  # (batch_size, 1)
         predictions_re = self.classifier_re(X_concat)  # (batch_size, 1)
         predictions_pro = self.classifier_pro(X_concat)  # (batch_size, 1)
@@ -173,15 +197,7 @@ class GraphGRUMortalityModel(nn.Module):
         return predictions
 
 
-    def masked_bce_loss(self, logits, targets, mask, pos_weight=None):
-        T = min(logits.shape[1], targets.shape[1], mask.shape[1])
-        logits, targets, mask = logits[:, :T], targets[:, :T], mask[:, :T]
-        loss = nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)(logits, targets)
-        return (loss * mask).sum() / mask.sum()
-    
-
     def train_all(self, dataloaders, datasets, epochs: int = 10, learning_rate: float = 1e-3, pos_lambda : float = 1):
-        
         self.train()
         optim = torch.optim.Adam(self.parameters(), lr=learning_rate)
         best_validation_ap = - float('inf')
@@ -196,12 +212,12 @@ class GraphGRUMortalityModel(nn.Module):
         for epoch in range(epochs):
             print(f'Starting epoch {epoch + 1}/{epochs}')
             total = 0
-            for x, y, padding_mask, idx, notes, bios in tqdm(dataloaders['train']):
+            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloaders['train']):
                 optim.zero_grad()
 
                 x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
                 edge_index = datasets['train'].get_edge_index(x, padding_mask, idx).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index, notes, bios)
+                predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
                 loss = losses[0](predictions[:, 0], y[:, 0]) + \
                        losses[1](predictions[:, 1], y[:, 1]) + \
                        losses[2](predictions[:, 2], y[:, 2])
@@ -229,11 +245,11 @@ class GraphGRUMortalityModel(nn.Module):
         with torch.no_grad():
             all_true_labels = {i: [] for i in range(3)}
             all_predicted_labels = {i: [] for i in range(3)}
-            for x, y, padding_mask, idx, notes, bios in tqdm(dataloader):
+            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader):
                 x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
                 # edge_index = dataset.build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
                 edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index, notes, bios)
+                predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
                 for i in range(3):
                     all_true_labels[i].extend(y[:, i].cpu().numpy())
                     all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
