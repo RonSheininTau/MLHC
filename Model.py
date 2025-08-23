@@ -11,8 +11,8 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 NOTE_DIM = 768  
 
 class GraphGRUMortalityModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, n1_gat_layers, n2_gru_layers, X_core, core_padding_mask,
-                 num_of_bios, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
+    def __init__(self, input_dim, hidden_dim,  n1_gat_layers, n2_gru_layers, X_core, core_padding_mask,
+                 num_of_bios, bios_hidden_dim=None, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
         """
         Mortality prediction model with Graph Attention + GRU layers
         
@@ -38,9 +38,10 @@ class GraphGRUMortalityModel(nn.Module):
         self.num_heads = num_heads
         self.gnn_flag = gnn_flag
         self.num_of_bios = num_of_bios
+        self.bios_hidden_dim = bios_hidden_dim if bios_hidden_dim is not None else hidden_dim
         
         self.notes_layer = nn.Linear(NOTE_DIM, hidden_dim).to(DEVICE) 
-        self.bios_layer = nn.Linear(num_of_bios, hidden_dim).to(DEVICE)
+        self.bios_layer = nn.Linear(num_of_bios, self.bios_hidden_dim).to(DEVICE)
         self.gat_layers = nn.ModuleList().to(DEVICE)
         
         self.gat_layers.append(
@@ -58,7 +59,7 @@ class GraphGRUMortalityModel(nn.Module):
             self.gru = nn.GRU(input_dim, hidden_dim, n2_gru_layers, batch_first=True, dropout=dropout)
         
         self.classifier_mort = nn.Sequential(
-            nn.Linear(5*hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -68,7 +69,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_re = nn.Sequential(
-            nn.Linear(5*hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -78,7 +79,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_pro = nn.Sequential(
-            nn.Linear(5*hidden_dim, hidden_dim),
+            nn.Linear(4*hidden_dim + self.bios_hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -188,7 +189,7 @@ class GraphGRUMortalityModel(nn.Module):
         for i in range(datasets['train'].y.shape[1]):
             targets = datasets['train'].y[:,i] # Get the max target for each patien
             pos_weight = (targets == 0).sum() / (targets == 1).sum()  # Adjust pos_weight as needed
-            losses.append(nn.BCEWithLogitsLoss(reduction='mean', pos_weight=pos_weight))
+            losses.append(nn.BCEWithLogitsLoss(reduction='mean', pos_weight=pos_weight*pos_lambda))
             print(f'Pos weight {i}: {pos_weight:.4f}')
 
 

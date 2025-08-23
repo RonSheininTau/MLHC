@@ -18,6 +18,7 @@ sys.modules["numpy._core.numeric"] = np.core.numeric
 MIN_TARGET_ONSET = 2*24  # minimal time of target since admission (hours)
 MIN_LOS = 24  # minimal length of stay (hours)
 PREDICT_FREQ = '4H'  # frequency of prediction (1 hour)
+GAP_HOURS = 6  # gap hours for prediction
 
 ICUQ = \
 """--sql
@@ -118,11 +119,17 @@ def create_labels(hosps):
     
     hosps_sorted['prolonged_stay'] = (hosps_sorted['los_hosp_hr'] > 7 * 24).astype(int)
     hosps_sorted['readmission_30day'] = 0
-    
-    hosps_sorted['next_admittime'] = hosps_sorted.groupby('subject_id')['admittime'].shift(-1)
-    days_between = (hosps_sorted['next_admittime'] - hosps_sorted['dischtime']).dt.total_seconds() / (24 * 3600)
-    hosps_sorted['readmission_30day'] = ((days_between > 0) & (days_between <= 30)).astype(int)
-    
+    #hosps_sorted = hosps_sorted.sort_values(["subject_id", "admittime"])
+
+    # next admission time per subject
+    hosps_sorted["next_admittime"] = hosps_sorted.groupby("subject_id")["admittime"].shift(-1)
+
+    # time until next admission
+    delta = hosps_sorted["next_admittime"] - hosps_sorted["dischtime"]
+
+    # 30-day readmission label on the *current* stay (1 if patient returns within 30 days after this discharge)
+    hosps_sorted["readmission_30day"] = delta.between(pd.Timedelta(days=1), pd.Timedelta(days=30), inclusive="right").astype(int)
+
     return hosps_sorted[['subject_id', 'hadm_id', 'mort_30day', 'prolonged_stay', 'readmission_30day']]
 
 
@@ -183,8 +190,8 @@ def exclude_and_merge(hosps, labs, vits, lavbevent_meatdata, vital_meatdata):
 
     # Exclude patients that died in the first 48 hours of admission
     hours_to_death = (hosps['dod'] - hosps['admittime']).dt.total_seconds() / 3600
-    hosps = hosps[~((hosps['mort'].astype(bool)) & (hours_to_death < MIN_TARGET_ONSET))]
-    print(f"4. Exclude patients who died within {MIN_TARGET_ONSET}-hours of admission: N={hosps.shape[0]}")
+    hosps = hosps[~((hosps['mort'].astype(bool)) & (hours_to_death < MIN_TARGET_ONSET + GAP_HOURS))]
+    print(f"4. Exclude patients who died within {MIN_TARGET_ONSET + GAP_HOURS}-hours of admission: N={hosps.shape[0]}")
     labs = labs[labs['hadm_id'].isin(hosps['hadm_id'])]
 
     labs = pd.merge(labs,lavbevent_meatdata,on='itemid')
@@ -438,7 +445,8 @@ def preprocess_pipeline(path=r'./data'):
     bio_df = process_bios(merged, path=os.path.join(path, 'bios.csv'), threshold=240)
     bio_train = bio_df.loc[X_train['subject_id'].drop_duplicates()]
     bio_val = bio_df.loc[X_val['subject_id'].drop_duplicates()]
-    bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()]
+    bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()
+    ]
 
 
     padded_tensor_train, padding_mask_train = generate_series_data(X_train, group_col="subject_id", maxlen=18)
