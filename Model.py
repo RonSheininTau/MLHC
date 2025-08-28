@@ -1,3 +1,4 @@
+import sys
 from sklearn.metrics import average_precision_score, roc_auc_score
 import torch
 import torch.nn as nn
@@ -106,6 +107,16 @@ class GraphGRUMortalityModel(nn.Module):
         nn.init.xavier_uniform_(self.gru.weight_hh_l0)
         nn.init.constant_(self.gru.bias_ih_l0, 0.0)
         nn.init.constant_(self.gru.bias_hh_l0, 0.0)
+        for layer in self.classifier_mort:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+        for layer in self.classifier_re:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+        for layer in self.classifier_pro:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+
 
     @staticmethod
     def collect_bags(batch):
@@ -125,9 +136,6 @@ class GraphGRUMortalityModel(nn.Module):
         else:
             drug_ids = torch.empty(0, dtype=torch.long)
         return torch.tensor(subject_ids, dtype=torch.long), drug_ids, offsets
-        
-
-  
         
     def forward(self, x ,padding_mask, edge_index, nots, bios, prescriptions):
         """
@@ -212,7 +220,7 @@ class GraphGRUMortalityModel(nn.Module):
         for epoch in range(epochs):
             print(f'Starting epoch {epoch + 1}/{epochs}')
             total = 0
-            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloaders['train']):
+            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloaders['train'], file=sys.stdout):
                 optim.zero_grad()
 
                 x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
@@ -245,7 +253,7 @@ class GraphGRUMortalityModel(nn.Module):
         with torch.no_grad():
             all_true_labels = {i: [] for i in range(3)}
             all_predicted_labels = {i: [] for i in range(3)}
-            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader):
+            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
                 x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
                 # edge_index = dataset.build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
                 edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)

@@ -1,7 +1,6 @@
 import sys
 import pandas as pd
 import numpy as np
-from tqdm import tqdm 
 import pickle
 import torch
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
@@ -277,8 +276,6 @@ def train_test_split(merged, labels_df):
     y_test = y_test.groupby('subject_id',as_index=False).max()
     X_test.drop(columns=["mort_30day","prolonged_stay","readmission_30day"], axis=1, inplace=True)
 
-
-
     num_cols = X_train.select_dtypes(include='float').columns
     scaler = StandardScaler()
 
@@ -438,18 +435,17 @@ def generate_series_data(df, group_col="subject_id", maxlen=18):
   return padded_tensor, padding_mask
 
 
-def preprocess_pipeline(path=r'./data'):
+def preprocess_pipeline(path=r'./data', num_clusters=240):
 
     subject_ids, lab_event_metadata, vital_metadata, labs, vits, hosps = load_data(path)
     labels_df = create_labels(hosps)
     hosps = ethnicity_to_ohe(hosps)
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
     X_train, y_train, X_val, y_val, X_test, y_test = train_test_split(merged, labels_df)
-    selected_subjects = cluster_and_select_subjects(X_train, num_clusters=100, random_state=42)
 
     notes_df = load_notes_embeddings(merged, path=os.path.join(path, 'notes_with_embeddings.pkl'))
 
-    selected_subjects = cluster_and_select_subjects(X_train, num_clusters=240, random_state=42)
+    selected_subjects = cluster_and_select_subjects(X_train, num_clusters=num_clusters, random_state=42)
 
     X_core = X_train[X_train['subject_id'].isin(selected_subjects)]
     y_core = y_train[y_train['subject_id'].isin(selected_subjects)]
@@ -457,9 +453,6 @@ def preprocess_pipeline(path=r'./data'):
     # Update X_train to exclude the selected subjects
     X_train = X_train[~X_train['subject_id'].isin(selected_subjects)]
     y_train = y_train[~y_train['subject_id'].isin(selected_subjects)]
-
-
-
 
     prescriptions_table = process_prescriptions(merged, path=os.path.join(path, 'prescriptions.csv'), threshold=240)
     pre_train = prescriptions_table.loc[X_train['subject_id'].drop_duplicates()]
@@ -470,7 +463,6 @@ def preprocess_pipeline(path=r'./data'):
     bio_train = bio_df.loc[X_train['subject_id'].drop_duplicates()]
     bio_val = bio_df.loc[X_val['subject_id'].drop_duplicates()]
     bio_test = bio_df.loc[X_test['subject_id'].drop_duplicates()]
-
 
     padded_tensor_train, padding_mask_train = generate_series_data(X_train, group_col="subject_id", maxlen=18)
     padded_tensor_core, padding_mask_core = generate_series_data(X_core, group_col="subject_id", maxlen=18)
@@ -512,4 +504,4 @@ def preprocess_pipeline(path=r'./data'):
 
 
 if __name__ == "__main__":
-    preprocess_pipeline()
+    preprocess_pipeline(num_clusters=100)
