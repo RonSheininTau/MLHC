@@ -56,25 +56,62 @@ f"""--sql
                             AND itemid::INTEGER IN ? \
                             """
 
-VITQUERY = f"""--sql
-        SELECT chartevents.subject_id::INTEGER AS subject_id\
-             , chartevents.hadm_id::INTEGER AS hadm_id\
-             , chartevents.charttime::DATE AS charttime\
-             , chartevents.itemid::INTEGER AS itemid\
-             , chartevents.valuenum::DOUBLE AS valuenum\
-             , admissions.admittime::DATE AS admittime\
-        FROM chartevents
-                 INNER JOIN admissions
-                            ON chartevents.subject_id = admissions.subject_id
-                                AND chartevents.hadm_id = admissions.hadm_id
-                                AND chartevents.charttime::DATE between
-                                   (admissions.admittime::DATE)
-                                   AND (admissions.admittime::DATE + interval 48 hour)
-                                AND itemid::INTEGER in ?
-      -- exclude rows marked as error
-      AND chartevents.error::INTEGER IS DISTINCT \
-        FROM 1 \
-        """
+VITQUERY = f"""
+  --sql
+  SELECT
+    ce.subject_id::INTEGER AS subject_id,
+    ce.hadm_id::INTEGER    AS hadm_id,
+    ce.charttime           AS charttime,
+    ce.itemid::INTEGER     AS itemid,
+    ce.valuenum::DOUBLE    AS valuenum,
+    a.admittime::DATE      AS admittime
+  FROM chartevents AS ce
+    JOIN admissions AS a
+      ON ce.subject_id = a.subject_id
+      AND ce.hadm_id    = a.hadm_id
+  WHERE ce.charttime::DATE BETWEEN a.admittime::DATE
+                              AND a.admittime::DATE + INTERVAL 48 HOUR
+    AND ce.itemid::INTEGER     IN (SELECT * FROM UNNEST(?))
+    AND ce.subject_id::INTEGER IN (SELECT * FROM UNNEST(?))
+    AND ce.error::INTEGER IS DISTINCT FROM 1
+  """
+
+NOTES = """
+SELECT n.subject_id, n.charttime, n.text
+FROM noteevents AS n
+JOIN admissions  AS a ON n.subject_id = a.subject_id        -- or: ON n.hadm_id = a.hadm_id (safer, avoids dupes)
+JOIN time_windows AS w ON w.subject_id = a.subject_id
+WHERE a.subject_id::INTEGER IN (SELECT * FROM UNNEST(?))     -- or drop this line if w already filters subjects
+  AND n.charttime::DATE BETWEEN w.min_charttime::DATE AND w.max_charttime::DATE
+ORDER BY n.subject_id, n.charttime
+"""
+
+MEDS = """
+SELECT n.subject_id,n.hadm_id, n.startdate, n.enddate, n.drug, n.drug_name_poe, n.drug_name_generic, n.dose_val_rx, n.dose_unit_rx
+FROM prescriptions AS n
+JOIN admissions AS a ON n.subject_id = a.subject_id        -- or: ON n.hadm_id = a.hadm_id (safer, avoids dupes)
+JOIN time_windows AS w ON w.subject_id = a.subject_id
+WHERE a.subject_id::INTEGER IN (SELECT * FROM UNNEST(?))     -- or drop this line if w already filters subjects
+  AND n.startdate::DATE BETWEEN w.min_charttime::DATE AND w.max_charttime::DATE
+ORDER BY n.subject_id, n.startdate
+"""
+
+BIOQUERY = \
+f"""--sql
+SELECT microbiologyevents.subject_id::INTEGER AS subject_id\
+      , microbiologyevents.hadm_id::INTEGER AS hadm_id\
+      , microbiologyevents.charttime::DATE AS charttime
+      , microbiologyevents.spec_itemid::INTEGER AS spec_itemid\
+      , microbiologyevents.org_itemid::INTEGER AS org_itemid\
+
+FROM microbiologyevents INNER JOIN admissions
+                    ON microbiologyevents.subject_id = admissions.subject_id
+                        AND microbiologyevents.hadm_id = admissions.hadm_id
+                        AND microbiologyevents.charttime::DATE between
+                            (admissions.admittime::DATE)
+                            AND (admissions.admittime::DATE + interval 48 hour)
+                        AND admissions.subject_id::INTEGER IN ? \
+                        """
 
 def load_data(path = r"./data"):
     """
@@ -298,6 +335,7 @@ def train_test_split(merged, labels_df):
     return X_train, y_train, X_val, y_val, X_test, y_test
 
 
+    
 def cluster_and_select_subjects(X_train, num_clusters=10, random_state=42):
     """
     Calculate the first row of each subject_id in X_train, cluster it to num_clusters 
@@ -335,18 +373,20 @@ def cluster_and_select_subjects(X_train, num_clusters=10, random_state=42):
     return selected_subjects
 
 
-def load_notes_embeddings(merged, path='data/notes_with_embeddings.pkl'):
+
+def load_notes_embeddings(merged,notes=None, path='data/notes_with_embeddings.pkl'):
 # Create an alias so pickle can find the old path
 
-    with open(path, "rb") as f:
-        notes = pickle.load(f)
-        notes_ordered = merged[['subject_id']].drop_duplicates().merge(
-        notes[["subject_id","embeddings"]], 
-        on='subject_id', 
-        how='left'
+    if notes is None:
+      with open(path, "rb") as f:
+          notes = pickle.load(f)
+    notes_ordered = merged[['subject_id']].drop_duplicates().merge(
+    notes[["subject_id","embeddings"]], 
+      on='subject_id', 
+      how='left'
     )
 
-        embeddings_dict = {}
+    embeddings_dict = {}
 
     for idx, row in notes_ordered.iterrows():
         subject_id = row['subject_id']
@@ -382,17 +422,22 @@ def load_notes_embeddings(merged, path='data/notes_with_embeddings.pkl'):
     return notes_df
 
 
-def process_bios(merged, path='data/bios.csv', threshold=240):
-    bios = pd.read_csv(path)
+def process_bios(merged, bios=None, path='data/bios.csv', threshold=240, orgs=None):
+    if bios is None:
+      bios = pd.read_csv(path)
     bios = bios.loc[bios.hadm_id.isin(merged.hadm_id) & bios.subject_id.isin(merged.subject_id)]
-    item_counts = bios[["subject_id", "org_itemid"]].drop_duplicates()["org_itemid"].value_counts()
-    valid_items = item_counts[item_counts > 240].index
-    bios_filtered = bios[bios["org_itemid"].isin(valid_items)]
+    bios["org_itemid"] = bios["org_itemid"].astype(str)
+    if orgs is None:
+      item_counts = bios[["subject_id", "org_itemid"]].drop_duplicates()["org_itemid"].value_counts()
+      valid_items = item_counts[item_counts > threshold].index
+      bios_filtered = bios[bios["org_itemid"].isin(valid_items)]
+    else:
+      bios_filtered = bios[bios["org_itemid"].isin(orgs)]
     bios_merge = merged[['subject_id', 'hadm_id']].drop_duplicates().merge(
         bios_filtered,
         on=['subject_id', 'hadm_id'],
         how='left'
-    ).fillna("Nonn")
+    ).fillna("None")
 
     bios_onehot = pd.get_dummies(bios_merge, columns=['org_itemid'], prefix='org')
     groupby_cols = ['subject_id', 'hadm_id']
@@ -401,17 +446,21 @@ def process_bios(merged, path='data/bios.csv', threshold=240):
 
     return bios_table
 
-def process_prescriptions(merged, path='data/prescriptions.csv', threshold=240):
-    prescriptions = pd.read_csv(path, index_col=0)
+def process_prescriptions(merged, prescriptions=None, path='data/prescriptions.csv', threshold=240, drugs=None):
+    if prescriptions is None:
+          prescriptions = pd.read_csv(path, index_col=0)      
     prescriptions = prescriptions.loc[prescriptions.hadm_id.isin(merged.hadm_id) & prescriptions.subject_id.isin(merged.subject_id)]
-    item_counts = prescriptions[["subject_id", "drug"]].drop_duplicates()["drug"].value_counts()
-    valid_items = item_counts[item_counts > threshold].index
-    prescriptions_filtered = prescriptions[prescriptions["drug"].isin(valid_items)][['subject_id', "hadm_id", 'drug']].drop_duplicates()
+    if drugs is None:
+      item_counts = prescriptions[["subject_id", "drug"]].drop_duplicates()["drug"].value_counts()
+      valid_items = item_counts[item_counts > threshold].index
+      prescriptions_filtered = prescriptions[prescriptions["drug"].isin(valid_items)][['subject_id', "hadm_id", 'drug']].drop_duplicates()
+    else:
+      prescriptions_filtered = prescriptions[prescriptions["drug"].isin(drugs)][['subject_id', "hadm_id", 'drug']].drop_duplicates()
     prescriptions_merge = merged[['subject_id', 'hadm_id']].drop_duplicates().merge(
             prescriptions_filtered,
             on=['subject_id', 'hadm_id'],
             how='left'
-        ).fillna("Nonn")
+        ).fillna("None")
 
     prescriptions_onehot = pd.get_dummies(prescriptions_merge, columns=['drug'], prefix='drug')
     groupby_cols = ['subject_id', 'hadm_id']
@@ -420,7 +469,6 @@ def process_prescriptions(merged, path='data/prescriptions.csv', threshold=240):
 
 
     return prescriptions_table
-
 
 def generate_series_data(df, group_col="subject_id", maxlen=18):
   grouped = df.groupby(group_col)
@@ -443,7 +491,7 @@ def preprocess_pipeline(path=r'./data', num_clusters=240):
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
     X_train, y_train, X_val, y_val, X_test, y_test = train_test_split(merged, labels_df)
 
-    notes_df = load_notes_embeddings(merged, path=os.path.join(path, 'notes_with_embeddings.pkl'))
+    notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings.pkl'))
 
     selected_subjects = cluster_and_select_subjects(X_train, num_clusters=num_clusters, random_state=42)
 

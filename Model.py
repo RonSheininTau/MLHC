@@ -268,4 +268,80 @@ class GraphGRUMortalityModel(nn.Module):
         return roc_auc_score(all_true_labels[0], all_predicted_labels[0]), average_precision_score(all_true_labels[0], all_predicted_labels[0]), \
                 roc_auc_score(all_true_labels[1], all_predicted_labels[1]), average_precision_score(all_true_labels[1], all_predicted_labels[1]), \
                 roc_auc_score(all_true_labels[2], all_predicted_labels[2]), average_precision_score(all_true_labels[2], all_predicted_labels[2])
+
+    
+    def inference(self, dataloader, dataset):
+        self.eval()
+        all_predicted_labels = {i: [] for i in range(3)}
+        with torch.no_grad():
+            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
+                x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
+                edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
+                predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
+
+                for i in range(3):
+                    all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
+
+        return all_predicted_labels
+      
+        
+    def save_model(self, filepath: str, ):
+        save_dict = {
+            'model_state_dict': self.state_dict(),
+            'model_class': self.__class__.__name__,
+            'model_config': {
+                'input_dim': self.input_dim,
+                'hidden_dim': self.hidden_dim,
+                'n1_gat_layers': self.n1_gat_layers,
+                'n2_gru_layers': self.n2_gru_layers,
+                'num_heads': self.num_heads,
+                'seq_len': self.seq_len,
+                'gnn_flag': self.gnn_flag,
+                'num_of_bios': self.num_of_bios,
+                'num_prescriptions': self.num_prescriptions,
+                'bios_hidden_dim': self.bios_hidden_dim,
+                'pres_hidden_dim': self.pres_hidden_dim,
+                'k': self.k,
+                'X_core': self.X_core,
+                'core_padding_mask': self.core_padding_mask
+            }
+        }
+    
+            
+        torch.save(save_dict, filepath)
+        print(f"Model saved to {filepath}")
+
+    @classmethod
+    def load_model(cls, filepath, device=None):
+        if device is None:
+            device = DEVICE
+            
+        checkpoint = torch.load(filepath, map_location=device)
+        
+        # Extract model configuration
+        config = checkpoint['model_config']
+        
+        # Create model instance
+        model = cls(
+            input_dim=config['input_dim'],
+            hidden_dim=config['hidden_dim'],
+            n1_gat_layers=config['n1_gat_layers'],
+            n2_gru_layers=config['n2_gru_layers'],
+            X_core=config['X_core'],
+            core_padding_mask=config['core_padding_mask'],
+            num_of_bios=config['num_of_bios'],
+            num_prescriptions=config['num_prescriptions'],
+            bios_hidden_dim=config['bios_hidden_dim'],
+            pres_hidden_dim=config['pres_hidden_dim'],
+            num_heads=config['num_heads'],
+            seq_len=config['seq_len'],
+            k=config['k'],
+            gnn_flag=config['gnn_flag']
+        )
+        
+        # Load model state
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.to(device)
+            
+        return model
     
