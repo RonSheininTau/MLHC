@@ -261,7 +261,7 @@ class GraphGRUMortalityModel(nn.Module):
                 print("Best model updated")
         self.load_state_dict(self.best_model)
 
-    def validate(self, dataloader, dataset, return_predictions=False, calibrate=True):
+    def validate(self, dataloader, dataset, return_predictions=False):
         is_train = self.training
         if is_train:
             self.eval()
@@ -280,10 +280,7 @@ class GraphGRUMortalityModel(nn.Module):
         for i in range(3):
             raw_preds = np.array(all_predicted_labels[i])
             labels = np.array(all_true_labels[i])
-            if calibrate:
-                calibrated_preds[i] = self.calibrate_predictions(labels, raw_preds)
-            else:
-                calibrated_preds[i] = raw_preds
+            calibrated_preds[i] = self.calibrate_predictions(labels, raw_preds)
         
         if is_train:
             self.train()
@@ -294,21 +291,6 @@ class GraphGRUMortalityModel(nn.Module):
             roc_auc_score(all_true_labels[1], calibrated_preds[1]), average_precision_score(all_true_labels[1], calibrated_preds[1]),
             roc_auc_score(all_true_labels[2], calibrated_preds[2]), average_precision_score(all_true_labels[2], calibrated_preds[2]),
         )
-
-    
-    def inference(self, dataloader, dataset):
-        self.eval()
-        all_predicted_labels = {i: [] for i in range(3)}
-        with torch.no_grad():
-            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
-                x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
-                edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
-
-                for i in range(3):
-                    all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
-
-        return all_predicted_labels
       
         
     def save_model(self, filepath: str, ):

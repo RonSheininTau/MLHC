@@ -293,7 +293,7 @@ def inferance_query(subject_ids, con):
     dataloader = DataLoader(dataset, batch_size=128, shuffle=False)
 
     # Perform inference
-    res = model.inference(dataloader, dataset)
+    res = model.validate(dataloader, dataset, return_predictions=True)
     return res
 
 
