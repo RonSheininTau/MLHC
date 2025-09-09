@@ -199,7 +199,8 @@ def execute_extra_modalities_query(subject_ids, merged, con):
 
     min_max_df["min_charttime"] = pd.to_datetime(min_max_df["min_charttime"])
     min_max_df["max_charttime"] = pd.to_datetime(min_max_df["max_charttime"])
-    
+    con.register("time_windows", min_max_df)
+
     # Execute clinical notes query
     notes = (
         con.execute(preprocess.NOTES, [subject_ids])  
@@ -270,7 +271,7 @@ def inferance_query(subject_ids, con):
 
     scaler = data["scaler"]
     baseline_df = data["baseline_df"]
-    X = preprocess.transform_unseen_data(merged, scaler, baseline_df)
+    X = transform_unseen_data(merged, scaler, baseline_df)
     padded_tensor, padding_mask = preprocess.generate_series_data(X, group_col="subject_id", maxlen=18)
 
     notes["subject_id"] = notes["subject_id"].astype(int)
