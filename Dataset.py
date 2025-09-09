@@ -10,9 +10,9 @@ class PatientDataset(Dataset):
         self.padding_mask = padding_mask
         self.padding_mask_core = padding_mask_core
         self.k = k
-        self.notes = notes
-        self.bios = bios
-        self.prescriptions = prescriptions
+        self.notes = torch.stack(notes)
+        self.bios = torch.tensor(bios,dtype=torch.float32)
+        self.prescriptions =  torch.tensor(prescriptions,dtype=torch.float32)
         self.node_to_neighbors = self.build_knn_graph(X, core, padding_mask, padding_mask_core, k=k)
 
 
@@ -30,6 +30,7 @@ class PatientDataset(Dataset):
         Returns:
             edge_index: tensor of shape (2, num_edges) representing graph edges
         """
+        annotation = []
         batch_size, seq_len, _ = batch.shape
         core_size = self.core.shape[0]
         total_patients = batch_size + core_size
@@ -39,7 +40,7 @@ class PatientDataset(Dataset):
         all_padding_mask = torch.cat([padding_mask_batch, self.padding_mask_core.to(padding_mask_batch.device)], dim=0)
 
         edges = []
-        
+        annotations = {}
         for patient_idx in range(total_patients):
             for t in range(seq_len - 1):
                 if all_padding_mask[patient_idx, t] > 0 and all_padding_mask[patient_idx, t + 1] > 0:
@@ -48,7 +49,10 @@ class PatientDataset(Dataset):
    
                     edges.append([node_curr, node_next])
                     edges.append([node_next, node_curr])
-        
+                annotations[patient_idx * seq_len + t] = 1 if patient_idx < batch_size else 0
+            annotations[patient_idx * seq_len + t + 1] = 1 if patient_idx < batch_size else 0
+
+                
         edges = [torch.tensor(edges).t()]
 
         neighbors_list = []
@@ -72,7 +76,7 @@ class PatientDataset(Dataset):
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long)
         
-        return edge_index
+        return edge_index#, annotations
 
 
         
@@ -132,3 +136,13 @@ class PatientDataset(Dataset):
         
         result = [list(node_to_neighbors[i]) for i in range(total_patients * seq_len)]
         return result
+
+
+
+class PatientDatasetUnseen(PatientDataset):
+    def __init__(self, X, core, padding_mask, padding_mask_core, notes, bios, prescriptions, k=5):
+        super().__init__(X, None, core, padding_mask, padding_mask_core, notes, bios, prescriptions, k)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.padding_mask[idx], idx, self.notes[idx], self.bios[idx], self.prescriptions[idx]
+

@@ -104,6 +104,14 @@ def download_data():
         output_path = f'{td}/graph_gru_mortality_model.pt'
         gdown.download(download_url, output_path, quiet=False)
 
+        download_url = f'https://drive.google.com/uc?id=1pr3APIiwTALAA5jSMyFgkzG5GOYwJ8DE'
+        output_path = f'{td}/lab_metadata.csv'
+        gdown.download(download_url, output_path, quiet=False)
+
+        download_url = f'https://drive.google.com/uc?id=11Jq0OrfC8JQou3ngA0puMptUHYqw546I'
+        output_path = f'{td}/vital_metadata.csv'
+        gdown.download(download_url, output_path, quiet=False)
+
         # Load model
         model = GraphGRUMortalityModel.load_model(f'{td}/graph_gru_mortality_model.pt', device)
 
@@ -111,6 +119,9 @@ def download_data():
         with open(f"{td}/data.pkl", "rb") as f:
             data = pickle.load(f)
 
+        data['lavbevent_meatdata'] = pd.read_csv(f'{td}/lab_metadata.csv')
+        data['vital_meatdata'] = pd.read_csv(f'{td}/vital_metadata.csv')
+        
         return model, data
 
 
@@ -155,7 +166,6 @@ def exeute_basic_query(subject_ids, lavbevent_meatdata, vital_meatdata, con):
     merged = preprocess.exclude_and_merge(hosps, lab, vit, lavbevent_meatdata, vital_meatdata)
     
     return merged
-
 
 
 def execute_extra_modalities_query(subject_ids, merged, con):
@@ -222,7 +232,7 @@ def execute_extra_modalities_query(subject_ids, merged, con):
     return notes, bios, meds
 
 
-def inferance_query(subject_ids, lavbevent_meatdata, vital_meatdata, con):
+def inferance_query(subject_ids, con):
     """
     Execute the complete inference pipeline for unseen patient data.
     
@@ -232,8 +242,6 @@ def inferance_query(subject_ids, lavbevent_meatdata, vital_meatdata, con):
     
     Args:
         subject_ids (list): List of subject IDs for the unseen patients
-        lavbevent_meatdata (pandas.DataFrame): Metadata for laboratory events
-        vital_meatdata (pandas.DataFrame): Metadata for vital sign events
         con: Database connection object (e.g., BigQuery client)
         
     Returns:
@@ -250,7 +258,8 @@ def inferance_query(subject_ids, lavbevent_meatdata, vital_meatdata, con):
     """
     model, data = download_data() 
 
-    merged = exeute_basic_query(subject_ids, lavbevent_meatdata, vital_meatdata, con)
+
+    merged = exeute_basic_query(subject_ids, data['lavbevent_meatdata'], data['vital_meatdata'], con)
 
     notes, bios, meds = execute_extra_modalities_query(subject_ids, merged, con)
 
@@ -292,17 +301,30 @@ def run_pipeline_on_unseen_data(subject_ids ,client):
   """
   Run your full pipeline, from data loading to prediction.
 
-  :param subject_ids: A list of subject IDs of an unseen test set.
-  :type subject_ids: List[int]
+    :param subject_ids: A list of subject IDs of an unseen test set.
+    :type subject_ids: List[int]
 
   :param client: A BigQuery client object for accessing the MIMIC-III dataset.
   :type client: google.cloud.bigquery.client.Client
 
-  :return: DataFrame with the following columns:
-              - subject_id: Subject IDs, which in some cases can be different due to your analysis.
-              - mortality_proba: Prediction probabilities for mortality.
-              - prolonged_LOS_proba: Prediction probabilities for prolonged length of stay.
-              - readmission_proba: Prediction probabilities for readmission.
-  :rtype: pandas.DataFrame
-  """
-  raise NotImplementedError('You need to implement this function')
+    :return: DataFrame with the following columns:
+                - subject_id: Subject IDs, which in some cases can be different due to your analysis.
+                - mortality_proba: Prediction probabilities for mortality.
+                - prolonged_LOS_proba: Prediction probabilities for prolonged length of stay.
+                - readmission_proba: Prediction probabilities for readmission.
+    :rtype: pandas.DataFrame
+    """
+  try:
+      predictions = inferance_query(subject_ids, client)
+      
+      results_df = pd.DataFrame({
+          'subject_id': subject_ids[:len(predictions[0])],  # Ensure we have matching lengths
+          'mortality_proba': predictions[0],  # Mortality predictions
+          'prolonged_LOS_proba': predictions[1],  # Prolonged LOS predictions
+          'readmission_proba': predictions[2]  # Readmission predictions
+      })
+      
+      return results_df
+        
+  except Exception as e:
+        print(f"Error in run_pipeline_on_unseen_data: {str(e)}")
