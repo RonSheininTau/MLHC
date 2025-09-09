@@ -5,8 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv,TransformerConv
 from tqdm import tqdm
-
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
+import numpy as np
+import shap
+import matplotlib.pyplot as plt
+import pandas as pd
+
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 NOTE_DIM = 768  
@@ -62,8 +67,11 @@ class GraphGRUMortalityModel(nn.Module):
         else:
             self.gru = nn.GRU(input_dim, hidden_dim, n2_gru_layers, batch_first=True, dropout=dropout)
         
+        clf_input_dim = 4 * hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim
+        if not self.gnn_flag:
+            clf_input_dim = 3 * hidden_dim
         self.classifier_mort = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
+            nn.Linear(clf_input_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -73,7 +81,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_re = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
+            nn.Linear(clf_input_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -83,7 +91,7 @@ class GraphGRUMortalityModel(nn.Module):
         )
 
         self.classifier_pro = nn.Sequential(
-            nn.Linear(4*hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim, hidden_dim),
+            nn.Linear(clf_input_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -117,7 +125,13 @@ class GraphGRUMortalityModel(nn.Module):
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
 
+    @staticmethod
+    def calibrate_predictions(true_labels, raw_predictions):
+        calibrator = LogisticRegression(solver="lbfgs")
+        calibrator.fit(raw_predictions.reshape(-1, 1), true_labels)
+        return calibrator.predict_proba(raw_predictions.reshape(-1, 1))[:, 1]
 
+        
     @staticmethod
     def collect_bags(batch):
         """
@@ -174,15 +188,9 @@ class GraphGRUMortalityModel(nn.Module):
         
         else:
             batch_output = x
-        # Apply GRU layers
-        # Pack sequences for efficient processing
-        # lengths from mask (True = pad) → count valid steps
+
         lengths = (padding_mask.to(bool)).sum(dim=1)                       # (batch,)
         lengths = lengths.clamp(min=1).cpu()
-        #packed_input = pack_padded_sequence(batch_output, lengths, batch_first=True, enforce_sorted=False)
-        #gru_output, _ = self.gru(packed_input)
-        # Unpack sequences
-        #gru_output, _ = pad_packed_sequence(gru_output, batch_first=True, total_length=self.seq_len)
 
         mask_index = padding_mask.sum(dim=1).long() - 1  # Get the last valid index for each sequence
         mask_expanded = padding_mask.unsqueeze(-1)    
@@ -191,13 +199,16 @@ class GraphGRUMortalityModel(nn.Module):
             gru_output[torch.arange(gru_output.size(0)), mask_index, :],
             (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
             (gru_output * mask_expanded).max(dim=1)[0]
-        ], dim=-1) 
+        ], dim=-1)
 
-        nots = F.relu(self.notes_layer(nots))
-        bios = F.relu(self.bios_layer(bios))
-        _, drug_ids, offsets = self.collect_bags(list(enumerate(prescriptions)))
-        pres = F.relu(self.pres_layer(drug_ids.to(DEVICE), offsets.to(DEVICE)))
-        X_concat = torch.cat([out, nots, bios, pres], dim=-1)  # (batch_size, seq_len, 2*hidden_dim)
+        if self.gnn_flag:
+            nots = F.relu(self.notes_layer(nots))
+            bios = F.relu(self.bios_layer(bios))
+            _, drug_ids, offsets = self.collect_bags(list(enumerate(prescriptions)))
+            pres = F.relu(self.pres_layer(drug_ids.to(DEVICE), offsets.to(DEVICE)))
+            X_concat = torch.cat([out, nots, bios, pres], dim=-1)
+        else:
+            X_concat = out
         predictions_mort = self.classifier_mort(X_concat)  # (batch_size, 1)
         predictions_re = self.classifier_re(X_concat)  # (batch_size, 1)
         predictions_pro = self.classifier_pro(X_concat)  # (batch_size, 1)
@@ -207,7 +218,9 @@ class GraphGRUMortalityModel(nn.Module):
 
     def train_all(self, dataloaders, datasets, epochs: int = 10, learning_rate: float = 1e-3, pos_lambda : float = 1):
         self.train()
-        optim = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        optim = torch.optim.AdamW(self.parameters(), lr=learning_rate)
+        # Add a learning rate scheduler (ReduceLROnPlateau based on validation AP)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='max', factor=0.33, patience=3, verbose=True, min_lr=1e-6)
         best_validation_ap = - float('inf')
         losses = []
         for i in range(datasets['train'].y.shape[1]):
@@ -240,32 +253,44 @@ class GraphGRUMortalityModel(nn.Module):
             print(f'Val Prolonged LOS - AUC: {validation_results[2]:.4f} | AP: {validation_results[3]:.4f}')
             print(f'Val Readmission - AUC: {validation_results[4]:.4f} | AP: {validation_results[5]:.4f}')
 
+            scheduler.step(validation_results[1])
+
             if validation_results[1] > best_validation_ap:
                 best_validation_ap = validation_results[1]
                 self.best_model = self.state_dict()
                 print("Best model updated")
         self.load_state_dict(self.best_model)
 
-    def validate(self, dataloader, dataset):
-        self.eval()
-        correct = 0
-        total = 0
+    def validate(self, dataloader, dataset, return_predictions=False, calibrate=True):
+        is_train = self.training
+        if is_train:
+            self.eval()
         with torch.no_grad():
             all_true_labels = {i: [] for i in range(3)}
             all_predicted_labels = {i: [] for i in range(3)}
             for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
                 x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
-                # edge_index = dataset.build_knn_graph(x, self.X_core, padding_mask, self.core_padding_mask, k=self.k).to(DEVICE)
                 edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
                 predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
                 for i in range(3):
                     all_true_labels[i].extend(y[:, i].cpu().numpy())
                     all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
-                # all_true_labels.extend(y.cpu().numpy())
-                # all_predicted_labels.extend(torch.sigmoid(predictions).cpu().numpy().flatten())
-                predicted_labels = (torch.sigmoid(predictions[:,0]) > 0.5).float()
-        self.train()
-        return roc_auc_score(all_true_labels[0], all_predicted_labels[0]), average_precision_score(all_true_labels[0], all_predicted_labels[0]), \
-                roc_auc_score(all_true_labels[1], all_predicted_labels[1]), average_precision_score(all_true_labels[1], all_predicted_labels[1]), \
-                roc_auc_score(all_true_labels[2], all_predicted_labels[2]), average_precision_score(all_true_labels[2], all_predicted_labels[2])
-    
+        
+        calibrated_preds = {}
+        for i in range(3):
+            raw_preds = np.array(all_predicted_labels[i])
+            labels = np.array(all_true_labels[i])
+            if calibrate:
+                calibrated_preds[i] = self.calibrate_predictions(labels, raw_preds)
+            else:
+                calibrated_preds[i] = raw_preds
+        
+        if is_train:
+            self.train()
+        if return_predictions:
+            return all_true_labels, calibrated_preds
+        return (
+            roc_auc_score(all_true_labels[0], calibrated_preds[0]), average_precision_score(all_true_labels[0], calibrated_preds[0]),
+            roc_auc_score(all_true_labels[1], calibrated_preds[1]), average_precision_score(all_true_labels[1], calibrated_preds[1]),
+            roc_auc_score(all_true_labels[2], calibrated_preds[2]), average_precision_score(all_true_labels[2], calibrated_preds[2]),
+        )
