@@ -24,7 +24,7 @@ def mean_pool(last_hidden_state, attention_mask):
     return summed / counts
 
 def embed_clinical(texts):
-    enc = tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
+    enc = tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt").to(device)
     with torch.no_grad():
         out = mdl(**enc)
     emb = mean_pool(out.last_hidden_state, enc["attention_mask"])
