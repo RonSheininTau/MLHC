@@ -57,6 +57,7 @@ class PatientDataset(Dataset):
 
         neighbors_list = []
         for idx in batch_indices:
+            idx = idx.int()
             neighbors_list.extend(self.node_to_neighbors[idx.item() * seq_len: (idx.item() + 1) * seq_len])
         neighbors_list.extend(self.node_to_neighbors[self.X.shape[0] * seq_len:])
     
@@ -66,9 +67,16 @@ class PatientDataset(Dataset):
 
             if len(valid_indices) > 1:
                 for i, patient_idx in enumerate(valid_indices):
-                    node_curr = patient_idx * seq_len + t
-                    to_append = torch.tensor(neighbors_list[node_curr], dtype=torch.long) - (self.X.shape[0] - batch_size) * seq_len  # Adjust index for core patients
-                    edges.append(torch.stack([to_append, torch.full_like(to_append, node_curr)], dim=0))
+                    try:
+                        node_curr = patient_idx * seq_len + t
+                        to_append = torch.tensor(neighbors_list[node_curr], dtype=torch.long) - (self.X.shape[0] - batch_size) * seq_len  # Adjust index for core patients
+                        edges.append(torch.stack([to_append, torch.full_like(to_append, node_curr)], dim=0))
+                    except:
+                        print(f"Error appending edge for patient {patient_idx} at time {t}")
+                        print(f"Node curr: {node_curr}")
+                        print(f"To append: {to_append}")
+                        print(f"All padding mask: {all_padding_mask}")
+                        print(f"Batch size: {batch_size}")
 
         
         if edges:
