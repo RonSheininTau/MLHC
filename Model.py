@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv,TransformerConv
 from tqdm import tqdm
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.metrics import average_precision_score, roc_auc_score
 import numpy as np
 import shap
@@ -18,7 +18,8 @@ NOTE_DIM = 768
 
 class GraphGRUMortalityModel(nn.Module):
     def __init__(self, input_dim, hidden_dim,  n1_gat_layers, n2_gru_layers, X_core, core_padding_mask,
-                 num_of_bios, num_prescriptions, bios_hidden_dim=None, pres_hidden_dim=None, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True):
+                 num_of_bios, num_prescriptions, bios_hidden_dim=None, pres_hidden_dim=None, num_heads=4, dropout=0.1, seq_len=18, k=5, gnn_flag=True,
+                 use_notes=True, use_bios=True, use_prescriptions=True, use_x=True):
         """
         Mortality prediction model with Graph Attention + GRU layers
         
@@ -27,10 +28,21 @@ class GraphGRUMortalityModel(nn.Module):
             hidden_dim: Hidden dimension for GAT and GRU layers
             n1_gat_layers: Number of Graph Attention layers
             n2_gru_layers: Number of GRU layers
-            X_core_dim: Core set dimension (number of core patients)
+            X_core: Core set tensor (number of core patients)
+            core_padding_mask: Padding mask for core patients
+            num_of_bios: Number of bios features
+            num_prescriptions: Number of prescription types
+            bios_hidden_dim: Hidden dimension for bios processing
+            pres_hidden_dim: Hidden dimension for prescription processing
             num_heads: Number of attention heads for GAT
             dropout: Dropout rate
             seq_len: Sequence length
+            k: Number of nearest neighbors for graph construction
+            gnn_flag: Whether to use GNN layers
+            use_notes: Whether to use notes modality
+            use_bios: Whether to use bios modality
+            use_prescriptions: Whether to use prescriptions modality
+            use_x: Whether to use main sequential data (X) modality
         """
         super(GraphGRUMortalityModel, self).__init__()
         
@@ -48,9 +60,27 @@ class GraphGRUMortalityModel(nn.Module):
         self.bios_hidden_dim = bios_hidden_dim if bios_hidden_dim is not None else hidden_dim
         self.pres_hidden_dim = pres_hidden_dim if pres_hidden_dim is not None else hidden_dim
         
-        self.notes_layer = nn.Linear(NOTE_DIM, hidden_dim).to(DEVICE) 
-        self.bios_layer = nn.Linear(num_of_bios, self.bios_hidden_dim).to(DEVICE)
-        self.pres_layer = nn.EmbeddingBag(num_prescriptions, self.pres_hidden_dim, mode='mean').to(DEVICE)
+        # Modality selection flags for ablation study
+        self.use_notes = use_notes
+        self.use_bios = use_bios
+        self.use_prescriptions = use_prescriptions
+        self.use_x = use_x
+        
+        # Conditionally create modality-specific layers based on selection flags
+        if self.use_notes:
+            self.notes_layer = nn.Linear(NOTE_DIM, hidden_dim).to(DEVICE)
+        else:
+            self.notes_layer = None
+            
+        if self.use_bios:
+            self.bios_layer = nn.Linear(num_of_bios, self.bios_hidden_dim).to(DEVICE)
+        else:
+            self.bios_layer = None
+            
+        if self.use_prescriptions:
+            self.pres_layer = nn.EmbeddingBag(num_prescriptions, self.pres_hidden_dim, mode='mean').to(DEVICE)
+        else:
+            self.pres_layer = None
         self.gat_layers = nn.ModuleList().to(DEVICE)
         
         self.gat_layers.append(
@@ -67,9 +97,21 @@ class GraphGRUMortalityModel(nn.Module):
         else:
             self.gru = nn.GRU(input_dim, hidden_dim, n2_gru_layers, batch_first=True, dropout=dropout)
         
-        clf_input_dim = 4 * hidden_dim + self.bios_hidden_dim + self.pres_hidden_dim
-        if not self.gnn_flag:
-            clf_input_dim = 3 * hidden_dim
+        clf_input_dim = 0
+        
+        if self.use_x:
+            clf_input_dim += 3 * hidden_dim
+        
+        if self.use_notes:
+            clf_input_dim += hidden_dim
+        if self.use_bios:
+            clf_input_dim += self.bios_hidden_dim
+        if self.use_prescriptions:
+            clf_input_dim += self.pres_hidden_dim
+            
+        if not self.gnn_flag and self.use_x:
+            clf_input_dim = 3 * hidden_dim 
+
         self.classifier_mort = nn.Sequential(
             nn.Linear(clf_input_dim, hidden_dim),
             nn.ReLU(),
@@ -125,11 +167,19 @@ class GraphGRUMortalityModel(nn.Module):
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
 
-    @staticmethod
-    def calibrate_predictions(true_labels, raw_predictions):
-        calibrator = LogisticRegression(solver="lbfgs")
-        calibrator.fit(raw_predictions.reshape(-1, 1), true_labels)
-        return calibrator.predict_proba(raw_predictions.reshape(-1, 1))[:, 1]
+        self.calibrator = None
+
+    def initialize_calibrator(self, true_labels = None, raw_predictions = None):
+        print("initializing calibrator")
+        self.calibrator = [LogisticRegressionCV(solver="lbfgs") for _ in range(len(raw_predictions))]
+        for i in range(len(raw_predictions)):
+            self.calibrator[i].fit(raw_predictions[i].reshape(-1, 1), true_labels[:, i].detach().cpu().numpy())
+
+    def calibrate_predictions(self, true_labels = None, raw_predictions = None, calibrator = 0):
+        if self.calibrator is None:
+            return raw_predictions
+        calibrated_predictions = self.calibrator[calibrator].predict_proba(raw_predictions.reshape(-1, 1))[:, 1]
+        return calibrated_predictions
 
         
     @staticmethod
@@ -168,7 +218,7 @@ class GraphGRUMortalityModel(nn.Module):
             predictions: Mortality predictions (batch_size, seq_len, 1)
         """
         batch_size = x.size(0)
-        
+
         if self.gnn_flag:
             all_patients = torch.cat([x, self.X_core], dim=0)  # (batch_size + X_core_dim, seq_len, input_dim)
             total_patients = batch_size + self.X_core.shape[0]
@@ -201,14 +251,24 @@ class GraphGRUMortalityModel(nn.Module):
             (gru_output * mask_expanded).max(dim=1)[0]
         ], dim=-1)
 
-        if self.gnn_flag:
-            nots = F.relu(self.notes_layer(nots))
-            bios = F.relu(self.bios_layer(bios))
+        # Process modalities conditionally based on selection flags
+        modality_outputs = [out]  # Always include GRU output
+        
+        if self.use_notes and self.notes_layer is not None:
+            nots_processed = F.relu(self.notes_layer(nots))
+            modality_outputs.append(nots_processed)
+            
+        if self.use_bios and self.bios_layer is not None:
+            bios_processed = F.relu(self.bios_layer(bios))
+            modality_outputs.append(bios_processed)
+            
+        if self.use_prescriptions and self.pres_layer is not None:
             _, drug_ids, offsets = self.collect_bags(list(enumerate(prescriptions)))
-            pres = F.relu(self.pres_layer(drug_ids.to(DEVICE), offsets.to(DEVICE)))
-            X_concat = torch.cat([out, nots, bios, pres], dim=-1)
-        else:
-            X_concat = out
+            pres_processed = F.relu(self.pres_layer(drug_ids.to(DEVICE), offsets.to(DEVICE)))
+            modality_outputs.append(pres_processed)
+        
+        # Concatenate all selected modality outputs
+        X_concat = torch.cat(modality_outputs, dim=-1)
         predictions_mort = self.classifier_mort(X_concat)  # (batch_size, 1)
         predictions_re = self.classifier_re(X_concat)  # (batch_size, 1)
         predictions_pro = self.classifier_pro(X_concat)  # (batch_size, 1)
@@ -248,7 +308,7 @@ class GraphGRUMortalityModel(nn.Module):
                 total += loss.item()
             avg_loss = total / len(dataloaders['train'])
             print(f'Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}')
-            validation_results = self.validate(dataloaders['val'], datasets['val'])
+            validation_results = self.validate(dataloaders['val'], datasets['val'], calibrate=False)
             print(f'Val Mortality - AUC: {validation_results[0]:.4f} | AP: {validation_results[1]:.4f}')
             print(f'Val Prolonged LOS - AUC: {validation_results[2]:.4f} | AP: {validation_results[3]:.4f}')
             print(f'Val Readmission - AUC: {validation_results[4]:.4f} | AP: {validation_results[5]:.4f}')
@@ -260,32 +320,44 @@ class GraphGRUMortalityModel(nn.Module):
                 self.best_model = self.state_dict()
                 print("Best model updated")
         self.load_state_dict(self.best_model)
+        self.initialize_calibrator(datasets['val'].y, self.validate(dataloaders['val'], datasets['val'], return_predictions=True, calibrate=False)[1])
 
-    def validate(self, dataloader, dataset, return_predictions=False):
+    def validate(self, dataloader, dataset, return_predictions=False, labels_exist=True, calibrate=True):
         is_train = self.training
         if is_train:
             self.eval()
         with torch.no_grad():
             all_true_labels = {i: [] for i in range(3)}
             all_predicted_labels = {i: [] for i in range(3)}
-            for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
-                x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
-                edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
-                predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
-                for i in range(3):
-                    all_true_labels[i].extend(y[:, i].cpu().numpy())
-                    all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
-        
+            if labels_exist:
+                for x, y, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
+                    x, padding_mask, y, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), y.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
+                    edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
+                    predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
+                    for i in range(3):
+                        all_true_labels[i].extend(y[:, i].cpu().numpy())
+                        all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
+            else:
+                for x, padding_mask, idx, notes, bios, prescriptions in tqdm(dataloader, file=sys.stdout):
+                    x, padding_mask, notes, bios = x.to(DEVICE), padding_mask.to(DEVICE), notes.to(DEVICE), bios.to(DEVICE)
+                    edge_index = dataset.get_edge_index(x, padding_mask, idx).to(DEVICE)
+                    predictions = self.forward(x, padding_mask, edge_index, notes, bios, prescriptions)
+                    for i in range(3):
+                        all_predicted_labels[i].extend(torch.sigmoid(predictions[:, i]).cpu().numpy().flatten())
+                   
         calibrated_preds = {}
         for i in range(3):
             raw_preds = np.array(all_predicted_labels[i])
-            labels = np.array(all_true_labels[i])
-            calibrated_preds[i] = self.calibrate_predictions(labels, raw_preds)
+            labels = np.array(all_true_labels[i]) if labels_exist else None
+            calibrated_preds[i] = self.calibrate_predictions(labels, raw_preds, i) if calibrate else raw_preds
         
         if is_train:
             self.train()
         if return_predictions:
-            return all_true_labels, calibrated_preds
+            if labels_exist:
+                return all_true_labels, calibrated_preds
+            else:
+                return calibrated_preds
         return (
             roc_auc_score(all_true_labels[0], calibrated_preds[0]), average_precision_score(all_true_labels[0], calibrated_preds[0]),
             roc_auc_score(all_true_labels[1], calibrated_preds[1]), average_precision_score(all_true_labels[1], calibrated_preds[1]),
@@ -311,11 +383,14 @@ class GraphGRUMortalityModel(nn.Module):
                 'pres_hidden_dim': self.pres_hidden_dim,
                 'k': self.k,
                 'X_core': self.X_core,
-                'core_padding_mask': self.core_padding_mask
+                'core_padding_mask': self.core_padding_mask,
+                'use_notes': self.use_notes,
+                'use_bios': self.use_bios,
+                'use_prescriptions': self.use_prescriptions,
+                'use_x': self.use_x
             }
         }
     
-            
         torch.save(save_dict, filepath)
         print(f"Model saved to {filepath}")
 
@@ -344,7 +419,11 @@ class GraphGRUMortalityModel(nn.Module):
             num_heads=config['num_heads'],
             seq_len=config['seq_len'],
             k=config['k'],
-            gnn_flag=config['gnn_flag']
+            gnn_flag=config['gnn_flag'],
+            use_notes=config.get('use_notes', True),
+            use_bios=config.get('use_bios', True),
+            use_prescriptions=config.get('use_prescriptions', True),
+            use_x=config.get('use_x', True)
         )
         
         # Load model state
