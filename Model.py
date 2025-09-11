@@ -173,7 +173,7 @@ class GraphGRUMortalityModel(nn.Module):
         print("initializing calibrator")
         self.calibrator = [LogisticRegressionCV(solver="lbfgs") for _ in range(len(raw_predictions))]
         for i in range(len(raw_predictions)):
-            self.calibrator[i].fit(raw_predictions[i].reshape(-1, 1), true_labels[:, i].detach().cpu().numpy())
+            self.calibrator[i].fit(raw_predictions[i].reshape(-1, 1), true_labels[i])
 
     def calibrate_predictions(self, true_labels = None, raw_predictions = None, calibrator = 0):
         if self.calibrator is None:
@@ -320,7 +320,8 @@ class GraphGRUMortalityModel(nn.Module):
                 self.best_model = self.state_dict()
                 print("Best model updated")
         self.load_state_dict(self.best_model)
-        self.initialize_calibrator(datasets['val'].y, self.validate(dataloaders['val'], datasets['val'], return_predictions=True, calibrate=False)[1])
+        val_results = self.validate(dataloaders['val'], datasets['val'], return_predictions=True, calibrate=False)
+        self.initialize_calibrator(val_results[0], val_results[1])
 
     def validate(self, dataloader, dataset, return_predictions=False, labels_exist=True, calibrate=True):
         is_train = self.training
@@ -358,6 +359,7 @@ class GraphGRUMortalityModel(nn.Module):
                 return all_true_labels, calibrated_preds
             else:
                 return calibrated_preds
+        
         return (
             roc_auc_score(all_true_labels[0], calibrated_preds[0]), average_precision_score(all_true_labels[0], calibrated_preds[0]),
             roc_auc_score(all_true_labels[1], calibrated_preds[1]), average_precision_score(all_true_labels[1], calibrated_preds[1]),
