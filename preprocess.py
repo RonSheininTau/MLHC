@@ -18,7 +18,7 @@ MIN_TARGET_ONSET = 2*24  # minimal time of target since admission (hours)
 MIN_LOS = 24  # minimal length of stay (hours)
 PREDICT_FREQ = '4H'  # frequency of prediction (1 hour)
 GAP_HOURS = 6  # gap hours for prediction
-
+SCALE_META_FEATURES = True
 ICUQ = \
 """--sql
     SELECT admissions.subject_id::INTEGER AS subject_id, admissions.hadm_id::INTEGER AS hadm_id
@@ -282,7 +282,7 @@ def exclude_and_merge(hosps, labs, vits, lavbevent_meatdata, vital_meatdata):
     return merged
 
 
-def train_test_split(merged, labels_df):
+def train_test_split(merged, labels_df, scale_meta_features=SCALE_META_FEATURES):
 
     np.random.seed(0)
     merged_clean = merged.reset_index(drop=True)
@@ -313,7 +313,10 @@ def train_test_split(merged, labels_df):
     y_test = y_test.groupby('subject_id',as_index=False).max()
     X_test.drop(columns=["mort_30day","prolonged_stay","readmission_30day"], axis=1, inplace=True)
 
-    num_cols = X_train.select_dtypes(include='float').columns
+    if scale_meta_features:
+        num_cols = X_train.select_dtypes(include=['float','int']).columns.drop(["subject_id","hadm_id","icustay_id","mort"])
+    else:
+        num_cols = X_train.select_dtypes(include='float').columns
     scaler = StandardScaler()
 
     X_train.loc[:, num_cols] = scaler.fit_transform(X_train[num_cols])
@@ -339,7 +342,7 @@ def train_test_split(merged, labels_df):
 def cluster_and_select_subjects(X_train, num_clusters=10, random_state=42):
     """
     Calculate the first row of each subject_id in X_train, cluster it to num_clusters 
-    and choose one subject_id from each cluster.
+    and choose the subject_id closest to each cluster centroid.
     
     Parameters:
     X_train: DataFrame with subject_id column
@@ -347,27 +350,34 @@ def cluster_and_select_subjects(X_train, num_clusters=10, random_state=42):
     random_state: int, for reproducibility
     
     Returns:
-    list: selected subject_ids, one from each cluster
+    list: selected subject_ids, one closest to each cluster centroid
     """
     first_rows = X_train.groupby('subject_id').first().reset_index()
     
     features_for_clustering = first_rows.drop('subject_id', axis=1)
     
+    # Normalize features to ensure each index has equal effect on distance calculation
 
     kmeans = KMeans(n_clusters=num_clusters, random_state=random_state, n_init=10)
     cluster_labels = kmeans.fit_predict(features_for_clustering)
-    
-
     first_rows['cluster'] = cluster_labels
     
 
-    np.random.seed(random_state)
     selected_subjects = []
     
     for cluster_id in range(num_clusters):
-        cluster_subjects = first_rows[first_rows['cluster'] == cluster_id]['subject_id'].values
+        cluster_mask = first_rows['cluster'] == cluster_id
+        cluster_subjects = first_rows[cluster_mask]['subject_id'].values
+        cluster_features = features_for_clustering[cluster_mask]
+        
         if len(cluster_subjects) > 0:
-            selected_subject = np.random.choice(cluster_subjects)
+            # Calculate distances from each point in cluster to the centroid
+            centroid = kmeans.cluster_centers_[cluster_id]
+            distances = np.linalg.norm(cluster_features - centroid, axis=1)
+            
+            # Select the subject with minimum distance to centroid
+            closest_idx = np.argmin(distances)
+            selected_subject = cluster_subjects[closest_idx]
             selected_subjects.append(selected_subject)
     
     return selected_subjects
@@ -483,13 +493,13 @@ def generate_series_data(df, group_col="subject_id", maxlen=18):
   return padded_tensor, padding_mask
 
 
-def preprocess_pipeline(path=r'./data', num_clusters=240):
+def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SCALE_META_FEATURES):
 
     subject_ids, lab_event_metadata, vital_metadata, labs, vits, hosps = load_data(path)
     labels_df = create_labels(hosps)
     hosps = ethnicity_to_ohe(hosps)
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
-    X_train, y_train, X_val, y_val, X_test, y_test = train_test_split(merged, labels_df)
+    X_train, y_train, X_val, y_val, X_test, y_test = train_test_split(merged, labels_df, scale_meta_features=scale_meta_features)
 
     notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings.pkl'))
 
