@@ -1,6 +1,6 @@
-# MLHC: Multi-Modal Graph Neural Network for ICU Mortality Prediction
+#CONTACT: Contextual and Temporal attention based framework for predicting clinical Trajectory
 
-![Model Architecture](MLHC/Model.png)
+![Model Architecture](Model.png)
 
 ## Overview
 
