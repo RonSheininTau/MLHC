@@ -294,7 +294,7 @@ def inferance_query(subject_ids, con):
     dataloader = DataLoader(dataset, batch_size=128, shuffle=False)
 
     # Perform inference
-    res = model.validate(dataloader, dataset, return_predictions=True)
+    res = model.validate(dataloader, dataset, return_predictions=True, labels_exist=False)
     return res
 
 
@@ -319,10 +319,10 @@ def run_pipeline_on_unseen_data(subject_ids ,client):
       predictions = inferance_query(subject_ids, client)
       
       results_df = pd.DataFrame({
-          'subject_id': subject_ids[:len(predictions[0])],  # Ensure we have matching lengths
-          'mortality_proba': predictions[0],  # Mortality predictions
-          'prolonged_LOS_proba': predictions[1],  # Prolonged LOS predictions
-          'readmission_proba': predictions[2]  # Readmission predictions
+          'subject_id': subject_ids[:len(predictions[0])],  
+          'mortality_proba': predictions[0],
+          'prolonged_LOS_proba': predictions[1],  
+          'readmission_proba': predictions[2]  
       })
       
       return results_df

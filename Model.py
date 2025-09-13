@@ -67,17 +67,17 @@ class GraphGRUMortalityModel(nn.Module):
         self.use_x = use_x
         
         # Conditionally create modality-specific layers based on selection flags
-        if self.use_notes:
+        if self.use_notes and gnn_flag:
             self.notes_layer = nn.Linear(NOTE_DIM, hidden_dim).to(DEVICE)
         else:
             self.notes_layer = None
             
-        if self.use_bios:
+        if self.use_bios and gnn_flag:
             self.bios_layer = nn.Linear(num_of_bios, self.bios_hidden_dim).to(DEVICE)
         else:
             self.bios_layer = None
             
-        if self.use_prescriptions:
+        if self.use_prescriptions and gnn_flag:
             self.pres_layer = nn.EmbeddingBag(num_prescriptions, self.pres_hidden_dim, mode='mean').to(DEVICE)
         else:
             self.pres_layer = None
@@ -110,7 +110,7 @@ class GraphGRUMortalityModel(nn.Module):
             clf_input_dim += self.pres_hidden_dim
             
         if not self.gnn_flag and self.use_x:
-            clf_input_dim = 3 * hidden_dim 
+            clf_input_dim = hidden_dim 
 
         self.classifier_mort = nn.Sequential(
             nn.Linear(clf_input_dim, hidden_dim),
@@ -220,36 +220,33 @@ class GraphGRUMortalityModel(nn.Module):
         batch_size = x.size(0)
 
         if self.gnn_flag:
-            all_patients = torch.cat([x, self.X_core], dim=0)  # (batch_size + X_core_dim, seq_len, input_dim)
+            all_patients = torch.cat([x, self.X_core], dim=0) 
             total_patients = batch_size + self.X_core.shape[0]
             
-            # Reshape for graph processing: (total_patients * seq_len, input_dim)
             graph_input = all_patients.view(total_patients * self.seq_len, -1)
-            # Apply GAT layers
             for gat_layer in self.gat_layers:
-                graph_input = F.relu(gat_layer(graph_input, edge_index))
+                graph_input = F.leaky_relu(gat_layer(graph_input, edge_index), negative_slope=0.2)
             
-            # Reshape back to sequence format: (total_patients, seq_len, hidden_dim)
             graph_output = graph_input.view(total_patients, self.seq_len, -1)
-
-            # Extract only batch patients (exclude core)
-        
-            batch_output = graph_output[:batch_size]  # (batch_size, seq_len, hidden_dim)
-        
+            batch_output = graph_output[:batch_size]  
         else:
             batch_output = x
 
         lengths = (padding_mask.to(bool)).sum(dim=1)                       # (batch,)
         lengths = lengths.clamp(min=1).cpu()
 
-        mask_index = padding_mask.sum(dim=1).long() - 1  # Get the last valid index for each sequence
+        mask_index = padding_mask.sum(dim=1).long() - 1 
         mask_expanded = padding_mask.unsqueeze(-1)    
         gru_output, _ = self.gru(batch_output)
-        out = torch.cat([
-            gru_output[torch.arange(gru_output.size(0)), mask_index, :],
-            (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
-            (gru_output * mask_expanded).max(dim=1)[0]
-        ], dim=-1)
+
+        if not self.gnn_flag:
+            out = gru_output[torch.arange(gru_output.size(0)), mask_index, :]
+        else:
+            out = torch.cat([
+                gru_output[torch.arange(gru_output.size(0)), mask_index, :],
+                (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
+                (gru_output * mask_expanded).max(dim=1)[0]
+            ], dim=-1)
 
         # Process modalities conditionally based on selection flags
         modality_outputs = [out]  # Always include GRU output
@@ -317,7 +314,7 @@ class GraphGRUMortalityModel(nn.Module):
 
             if validation_results[1] > best_validation_ap:
                 best_validation_ap = validation_results[1]
-                self.best_model = self.state_dict()
+                self.best_model = self.state_dict().copy()
                 print("Best model updated")
         self.load_state_dict(self.best_model)
         val_results = self.validate(dataloaders['val'], datasets['val'], return_predictions=True, calibrate=False)
@@ -403,10 +400,8 @@ class GraphGRUMortalityModel(nn.Module):
             
         checkpoint = torch.load(filepath, map_location=device)
         
-        # Extract model configuration
         config = checkpoint['model_config']
         
-        # Create model instance
         model = cls(
             input_dim=config['input_dim'],
             hidden_dim=config['hidden_dim'],

@@ -335,7 +335,7 @@ def train_test_split(merged, labels_df, scale_meta_features=SCALE_META_FEATURES)
     X_test = X_test[to_keep]
     X_val = X_val[to_keep]
     
-    return X_train, y_train, X_val, y_val, X_test, y_test
+    return X_train, y_train, X_val, y_val, X_test, y_test, scaler, baseline_df
 
 
     
@@ -499,7 +499,7 @@ def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SC
     labels_df = create_labels(hosps)
     hosps = ethnicity_to_ohe(hosps)
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
-    X_train, y_train, X_val, y_val, X_test, y_test = train_test_split(merged, labels_df, scale_meta_features=scale_meta_features)
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler, baseline_df = train_test_split(merged, labels_df, scale_meta_features=scale_meta_features)
 
     notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings.pkl'))
 
@@ -539,6 +539,10 @@ def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SC
         'y_val': y_val,
         'X_test': X_test,
         'y_test': y_test,
+        'scaler': scaler,
+        'baseline_df': baseline_df,
+        'orgs': bio_df.columns.tolist(),
+        'drugs': prescriptions_table.columns.tolist(),
         'y_core': y_core,
         'selected_subjects': selected_subjects,
         'notes_df_train': notes_df_train,
@@ -559,7 +563,6 @@ def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SC
         'prescriptions_val': pre_val,
         'prescriptions_test': pre_test,
     }
-
 
 if __name__ == "__main__":
     preprocess_pipeline(num_clusters=100)
