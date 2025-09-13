@@ -95,10 +95,9 @@ def download_data():
         print(f"Downloading data to temporary directory: {td}")
         
         # Download necessary data from traninig
-        download_url = f'https://drive.google.com/uc?id=1ocAMGK0ppVJqKClASCkmuRZdqY3IQBEV'
+        download_url = f'https://drive.google.com/uc?id=1TH7Hgo5XdLpOCCMq-KC56mjb4w3rxno_'
         output_path = f'{td}/data.pkl'
         gdown.download(download_url, output_path, quiet=False)
-      
         # Download trained model
         download_url = f'https://drive.google.com/uc?id=1zZ0pAJ9ASexmNS43WVKuHiQQTyVNnVe0'
         output_path = f'{td}/graph_gru_mortality_model.pt'
