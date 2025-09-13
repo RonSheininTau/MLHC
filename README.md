@@ -1,4 +1,4 @@
-#CONTACT: Contextual and Temporal attention based framework for predicting clinical Trajectory
+# CONTACT: Contextual and Temporal attention based framework for predicting clinical Trajectory
 
 ![Model Architecture](Model.png)
 
