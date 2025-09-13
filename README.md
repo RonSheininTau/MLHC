@@ -34,7 +34,6 @@ The model is trained on MIMIC-IV data with the following preprocessing:
 
 - **Patient Selection**: First admissions, age 18-89, minimum 24h stay
 - **Temporal Resolution**: 4-hour prediction windows
-- **Features**: 18 time steps of clinical measurements
 - **Targets**: 30-day mortality, prolonged stay (>7 days), 30-day readmission
 
 ## Installation
@@ -135,7 +134,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Contact
 
-For questions or collaborations, please contact [your-email@domain.com].
+For questions or collaborations, please contact [Ronsheinin@mail.tau.ac.il].
 
 ---
 
