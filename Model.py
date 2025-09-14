@@ -8,7 +8,6 @@ from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.metrics import average_precision_score, roc_auc_score
 import numpy as np
-import shap
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -277,7 +276,7 @@ class GraphGRUMortalityModel(nn.Module):
         self.train()
         optim = torch.optim.AdamW(self.parameters(), lr=learning_rate)
         # Add a learning rate scheduler (ReduceLROnPlateau based on validation AP)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='max', factor=0.33, patience=3, verbose=True, min_lr=1e-6)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='max', factor=0.33, patience=3, min_lr=1e-6)
         best_validation_ap = - float('inf')
         losses = []
         for i in range(datasets['train'].y.shape[1]):

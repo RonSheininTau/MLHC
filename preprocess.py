@@ -11,7 +11,8 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-
+import duckdb
+from NoteEmbedder import embed_long_texts
 sys.modules["numpy._core.numeric"] = np.core.numeric  
 
 MIN_TARGET_ONSET = 2*24  # minimal time of target since admission (hours)
@@ -411,6 +412,8 @@ def load_notes_embeddings(merged,notes=None, path='data/notes_with_embeddings.pk
                 # Assuming embeddings shape is (sequence_length, embedding_dim)
                 pooled_embedding = torch.mean(embeddings, dim=0)  # Shape: (embedding_dim,)
                 embeddings_dict[subject_id] = pooled_embedding
+            elif isinstance(embeddings, list):
+                embeddings_dict[subject_id] = torch.tensor(embeddings, dtype=torch.float32)
             else:
                 # Handle missing embeddings with zero vector
                 # Assuming embedding dimension is 768 (common for transformers)
@@ -500,8 +503,9 @@ def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SC
     hosps = ethnicity_to_ohe(hosps)
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
     X_train, y_train, X_val, y_val, X_test, y_test, scaler, baseline_df = train_test_split(merged, labels_df, scale_meta_features=scale_meta_features)
+    con = duckdb.connect(f'./data/mimiciii.duckdb')
 
-    notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings.pkl'))
+    notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings_fast.pkl'))
 
     selected_subjects = cluster_and_select_subjects(X_train, num_clusters=num_clusters, random_state=42)
 

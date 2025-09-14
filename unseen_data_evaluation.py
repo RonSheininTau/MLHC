@@ -5,7 +5,7 @@ import re
 import numpy as np
 import pandas as pd
 import math
-from NoteEmbedder import run_embeeding
+from NoteEmbedder import embed_long_texts
 from Model import GraphGRUMortalityModel
 from Dataset import PatientDataset, PatientDatasetUnseen
 import preprocess
@@ -52,7 +52,8 @@ def transform_unseen_data(merged, scaler, baseline_df):
     # Split to train & test (all data of a single patient needs to be in the same group)
     X = merged_clean
     X["icustay_id"] = X["icustay_id"].astype(float)
-    num_cols = X.select_dtypes(include='float').columns
+    num_cols = X.select_dtypes(include=['float','int']).columns.drop(["subject_id","hadm_id","icustay_id","mort"])
+
     X.loc[:, num_cols] = scaler.transform(X[num_cols])
     X.loc[:, num_cols] = X[num_cols].fillna(baseline_df)
 
@@ -95,7 +96,7 @@ def download_data():
         print(f"Downloading data to temporary directory: {td}")
         
         # Download necessary data from traninig
-        download_url = f'https://drive.google.com/uc?id=1TH7Hgo5XdLpOCCMq-KC56mjb4w3rxno_'
+        download_url = f'https://drive.google.com/uc?id=1z9MoXqEO4UT82W2UxsEiWT3QEepShW-Z'
         output_path = f'{td}/data.pkl'
         gdown.download(download_url, output_path, quiet=False)
         # Download trained model
@@ -264,7 +265,7 @@ def inferance_query(subject_ids, con):
     notes, bios, meds = execute_extra_modalities_query(subject_ids, merged, con)
 
     # Generate clinical note embeddings
-    notes["embeddings"] = run_embeeding(notes)
+    notes["embeddings"] = embed_long_texts(notes["text"].tolist(), batch_size=32, max_length=256, stride=64).tolist()
     gc.collect()  # Clean up memory
     torch.cuda.empty_cache()  # Clear GPU cache
 
@@ -293,6 +294,7 @@ def inferance_query(subject_ids, con):
     dataloader = DataLoader(dataset, batch_size=128, shuffle=False)
 
     # Perform inference
+    y = pd.read_csv(r"./data/y_test.csv")
     res = model.validate(dataloader, dataset, return_predictions=True, labels_exist=False)
     return res
 
