@@ -14,6 +14,10 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 import duckdb
 from NoteEmbedder import embed_long_texts
 sys.modules["numpy._core.numeric"] = np.core.numeric  
+os.environ['OPENBLAS_NUM_THREADS'] = '16'
+os.environ['MKL_NUM_THREADS'] = '16'
+os.environ['OMP_NUM_THREADS'] = '16'
+
 
 MIN_TARGET_ONSET = 2*24  # minimal time of target since admission (hours)
 MIN_LOS = 24  # minimal length of stay (hours)

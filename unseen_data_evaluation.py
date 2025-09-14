@@ -21,6 +21,9 @@ import pickle
 import gc
 import torch
 from torch.utils.data import DataLoader
+os.environ['OPENBLAS_NUM_THREADS'] = '16'
+os.environ['MKL_NUM_THREADS'] = '16'
+os.environ['OMP_NUM_THREADS'] = '16'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
