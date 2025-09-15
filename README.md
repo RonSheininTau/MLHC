@@ -48,6 +48,30 @@ The model is trained on MIMIC-IV data with the following preprocessing:
 
 ## Usage
 
+### Environment Setup
+
+Before running the code, set up your Python environment:
+
+- **If running on Google Colab:**
+  1. Install PyTorch Geometric (and dependencies) with:
+     ```python
+     !pip install torch-geometric==2.6.1
+     ```
+- **If running locally:**
+  1. (Recommended) Create a new environment using the provided `environment.yml` file:
+     ```bash
+     conda env create -f environment.yml
+     conda activate <env_name>
+     ```
+     Replace `<env_name>` with the name specified in the `environment.yml` file.
+  2. Alternatively, install all dependencies from `requirements.txt`:
+     ```bash
+     pip install -r requirements.txt
+     ```
+
+Make sure you have access to the MIMIC-III/IV data and have set up any required environment variables or database connections as described in the project documentation.
+
+
 For training and evaluating the model, use the `Project_Evaluation.ipynb` notebook:
 
 This notebook contains:
@@ -64,7 +88,7 @@ For inference on new patient datasets, use the `unseen_data_evaluation.py` scrip
 from unseen_data_evaluation import evaluate_unseen_data
 
 # Evaluate on new patient data
-results = evaluate_unseen_data(model_path, new_patient_data)
+results = run_pipeline_on_unseen_data(subject_ids ,con)
 ```
 
 This script handles:

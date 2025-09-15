@@ -133,8 +133,7 @@ def run_ablation_study(dataloaders, datasets, model_config):
         results[config_name] = {
             'description': modality_config['description'],
             'modality_config': modality_config,
-            'test_results': test_results,
-            'model': model
+            'test_results': test_results
         }
         
         # Save model
