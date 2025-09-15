@@ -40,21 +40,15 @@ The model is trained on MIMIC-IV data with the following preprocessing:
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10
 - CUDA-compatible GPU (recommended)
-- Access to MIMIC-IV database
+- Access to MIMIC-III database
 
 ```
 
 ## Usage
 
-### Training and Evaluation
-
 For training and evaluating the model, use the `Project_Evaluation.ipynb` notebook:
-
-```bash
-jupyter notebook Project_Evaluation.ipynb
-```
 
 This notebook contains:
 - Complete data preprocessing pipeline
@@ -88,53 +82,16 @@ This script handles:
 - `NoteEmbedder.py`: Clinical note embedding generation
 - `Project_Evaluation.ipynb`: Model evaluation and analysis
 
-## Model Performance
-
-The model achieves strong performance across all three prediction tasks:
-
-- **Mortality Prediction**: High AUC and precision-recall performance
-- **Prolonged Stay**: Effective identification of patients requiring extended care
-- **Readmission Risk**: Accurate prediction of 30-day readmission probability
-
-## Ablation Study Results
-
-The ablation study demonstrates the contribution of each modality:
-
-- **Clinical Time Series**: Core temporal patterns
-- **Clinical Notes**: Rich semantic information
-- **Biosignals**: Additional physiological indicators
-- **Prescriptions**: Medication-based insights
 
 ## Calibration
 
 The model includes prediction calibration using logistic regression to ensure reliable probability estimates for clinical decision-making.
+The calibration process can also be demonstrated and visualized within the `Project_Evaluation.ipynb` notebook, allowing users to observe calibration curves and assess the reliability of predicted probabilities alongside other model evaluation metrics.
 
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@article{mlhc2024,
-  title={Multi-Modal Graph Neural Networks for ICU Outcome Prediction},
-  author={[Your Name]},
-  journal={[Journal Name]},
-  year={2024}
-}
-```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- MIMIC-III database for providing the clinical data
-- PyTorch Geometric for GNN implementations
-- The healthcare AI research community
 
 ## Contact
 
-For questions or collaborations, please contact [Ronsheinin@mail.tau.ac.il].
+For questions or collaborations, please contact [Ronsheinin@mail.tau.ac.il, kupershmit@mail.tau.ac.il].
 
 ---
 
