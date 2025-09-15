@@ -12,7 +12,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import duckdb
-from NoteEmbedder import embed_long_texts
+# from NoteEmbedder import embed_long_texts
 sys.modules["numpy._core.numeric"] = np.core.numeric  
 os.environ['OPENBLAS_NUM_THREADS'] = '16'
 os.environ['MKL_NUM_THREADS'] = '16'
@@ -507,7 +507,7 @@ def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SC
     hosps = ethnicity_to_ohe(hosps)
     merged = exclude_and_merge(hosps, labs, vits, lab_event_metadata, vital_metadata)
     X_train, y_train, X_val, y_val, X_test, y_test, scaler, baseline_df = train_test_split(merged, labels_df, scale_meta_features=scale_meta_features)
-    con = duckdb.connect(f'./data/mimiciii.duckdb')
+    # con = duckdb.connect(f'./data/mimiciii.duckdb')
 
     notes_df = load_notes_embeddings(merged,path=os.path.join(path, 'notes_with_embeddings_fast.pkl'))
 

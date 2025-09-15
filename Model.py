@@ -108,7 +108,7 @@ class GraphGRUMortalityModel(nn.Module):
         if self.use_prescriptions:
             clf_input_dim += self.pres_hidden_dim
             
-        if not self.gnn_flag and self.use_x:
+        if not self.gnn_flag:
             clf_input_dim = hidden_dim 
 
         self.classifier_mort = nn.Sequential(
@@ -170,7 +170,7 @@ class GraphGRUMortalityModel(nn.Module):
 
     def initialize_calibrator(self, true_labels = None, raw_predictions = None):
         print("initializing calibrator")
-        self.calibrator = [LogisticRegressionCV(solver="lbfgs") for _ in range(len(raw_predictions))]
+        self.calibrator = [LogisticRegression(solver="lbfgs") for _ in range(len(raw_predictions))]
         for i in range(len(raw_predictions)):
             self.calibrator[i].fit(raw_predictions[i].reshape(-1, 1), true_labels[i])
 
@@ -230,26 +230,26 @@ class GraphGRUMortalityModel(nn.Module):
             batch_output = graph_output[:batch_size]  
         else:
             batch_output = x
+        modality_outputs = []
+        if self.use_x:
+            lengths = (padding_mask.to(bool)).sum(dim=1)                       # (batch,)
+            lengths = lengths.clamp(min=1).cpu()
 
-        lengths = (padding_mask.to(bool)).sum(dim=1)                       # (batch,)
-        lengths = lengths.clamp(min=1).cpu()
+            mask_index = padding_mask.sum(dim=1).long() - 1 
+            mask_expanded = padding_mask.unsqueeze(-1)    
+            gru_output, _ = self.gru(batch_output)
 
-        mask_index = padding_mask.sum(dim=1).long() - 1 
-        mask_expanded = padding_mask.unsqueeze(-1)    
-        gru_output, _ = self.gru(batch_output)
+            if not self.gnn_flag:
+                out = gru_output[torch.arange(gru_output.size(0)), mask_index, :]
+            else:
+                out = torch.cat([
+                    gru_output[torch.arange(gru_output.size(0)), mask_index, :],
+                    (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
+                    (gru_output * mask_expanded).max(dim=1)[0]
+                ], dim=-1)
+            
+            modality_outputs.append(out)
 
-        if not self.gnn_flag:
-            out = gru_output[torch.arange(gru_output.size(0)), mask_index, :]
-        else:
-            out = torch.cat([
-                gru_output[torch.arange(gru_output.size(0)), mask_index, :],
-                (gru_output * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1),
-                (gru_output * mask_expanded).max(dim=1)[0]
-            ], dim=-1)
-
-        # Process modalities conditionally based on selection flags
-        modality_outputs = [out]  # Always include GRU output
-        
         if self.use_notes and self.notes_layer is not None:
             nots_processed = F.relu(self.notes_layer(nots))
             modality_outputs.append(nots_processed)

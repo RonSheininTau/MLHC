@@ -6,7 +6,7 @@ from Model import GraphGRUMortalityModel
 from torch.utils.data import DataLoader
 import Dataset
 
-
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def create_model_for_ablation(datasets, model_config, modality_config):
     """
@@ -38,7 +38,7 @@ def create_model_for_ablation(datasets, model_config, modality_config):
         dropout=model_config['dropout'],    
         num_heads=model_config['num_heads'],
         seq_len=datasets['train'].X.shape[1],
-    )
+    ).to(DEVICE)
     
     return model
 
@@ -145,7 +145,7 @@ def run_ablation_study(dataloaders, datasets, model_config):
         # Print results
         print(f"\nTest Results for {config_name}:")
         print(f"  Mortality - AUC: {test_results[0]:.4f} | AP: {test_results[1]:.4f}")
-        print(f"  Prolonged LOS - AUC: {test_results[2]:.4f} | AP: {test_results[3]:.4f}")
+        print(f"  Prolonged - AUC: {test_results[2]:.4f} | AP: {test_results[3]:.4f}")
         print(f"  Readmission - AUC: {test_results[4]:.4f} | AP: {test_results[5]:.4f}")
     
     return results
@@ -163,16 +163,16 @@ def compare_ablation_results(results):
     print("ABLATION STUDY RESULTS COMPARISON")
     print(f"{'='*80}")
     
-    print(f"{'Configuration':<20} {'Mortality AP':<12} {'LOS AP':<12} {'Readmission AP':<15}")
+    print(f"{'Configuration':<20} {'Mortality AP':<12} {'Prolong AP':<12} {'Readmission AP':<15}")
     print("-" * 80)
     
     for config_name, result in results.items():
         test_results = result['test_results']
         mortality_ap = test_results[1]
-        los_ap = test_results[3] 
+        prolonged_ap = test_results[3] 
         readmission_ap = test_results[5]
         
-        print(f"{config_name:<20} {mortality_ap:<12.4f} {los_ap:<12.4f} {readmission_ap:<15.4f}")
+        print(f"{config_name:<20} {mortality_ap:<12.4f} {prolonged_ap:<12.4f} {readmission_ap:<15.4f}")
     
     print("\n" + "="*80)
     print("DETAILED RESULTS")
@@ -186,7 +186,7 @@ def compare_ablation_results(results):
         test_results = result['test_results']
         print(f"Test Results:")
         print(f"  Mortality - AUC: {test_results[0]:.4f} | AP: {test_results[1]:.4f}")
-        print(f"  Prolonged LOS - AUC: {test_results[2]:.4f} | AP: {test_results[3]:.4f}")
+        print(f"  Prolonged - AUC: {test_results[2]:.4f} | AP: {test_results[3]:.4f}")
         print(f"  Readmission - AUC: {test_results[4]:.4f} | AP: {test_results[5]:.4f}")
 
 if __name__ == "__main__":
@@ -196,7 +196,6 @@ if __name__ == "__main__":
                        'num_clusters': 240}
     data = preprocess.preprocess_pipeline(num_clusters=hyperparameters['num_clusters'])
     
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     k = hyperparameters['k']
 
     train_labels = torch.tensor(data["y_train"][['mort_30day', 'prolonged_stay', 'readmission_30day']].values, dtype=torch.float32).to(DEVICE)
@@ -205,10 +204,10 @@ if __name__ == "__main__":
 
 
     batch_size = hyperparameters['batch_size']
-    datasets = {x: Dataset.PatientDataset(d, y, core=data["padded_tensor_core"], padding_mask=m, padding_mask_core=data["padding_mask_core"], k=k ,notes=n, bios=b, prescriptions=p) for x, d, y, m, n, b, p in
-            zip(['train', 'val', 'test'], [data["padded_tensor_train"], data["padded_tensor_val"], data["padded_tensor_test"]],
+    datasets = {x: Dataset.PatientDataset(d, y, core=data["padded_tensor_core"].to(DEVICE), padding_mask=m, padding_mask_core=data["padding_mask_core"].to(DEVICE), k=k ,notes=n, bios=b, prescriptions=p) for x, d, y, m, n, b, p in
+            zip(['train', 'val', 'test'], [data["padded_tensor_train"].to(DEVICE), data["padded_tensor_val"].to(DEVICE), data["padded_tensor_test"].to(DEVICE)],
                 [train_labels, val_labels, test_labels],
-                [data["padding_mask_train"], data["padding_mask_val"], data["padding_mask_test"]],
+                [data["padding_mask_train"].to(DEVICE), data["padding_mask_val"].to(DEVICE), data["padding_mask_test"].to(DEVICE)],
                 [data["notes_df_train"].embeddings.values.tolist(),
                 data["notes_df_val"].embeddings.values.tolist(),
                 data["notes_df_test"].embeddings.values.tolist()],
