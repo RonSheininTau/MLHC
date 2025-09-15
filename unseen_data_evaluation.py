@@ -302,25 +302,25 @@ def inferance_query(subject_ids, con):
     return res
 
 
-def run_pipeline_on_unseen_data(subject_ids ,client):
+def run_pipeline_on_unseen_data(subject_ids ,con):
   """
   Run your full pipeline, from data loading to prediction.
 
-    :param subject_ids: A list of subject IDs of an unseen test set.
-    :type subject_ids: List[int]
+  :param subject_ids: A list of subject IDs of an unseen test set.
+  :type subject_ids: List[int]
 
-  :param client: A BigQuery client object for accessing the MIMIC-III dataset.
-  :type client: google.cloud.bigquery.client.Client
+  :param con: A DuckDB connection object.
+  :type con: duckdb.connection.Connection
 
-    :return: DataFrame with the following columns:
-                - subject_id: Subject IDs, which in some cases can be different due to your analysis.
-                - mortality_proba: Prediction probabilities for mortality.
-                - prolonged_LOS_proba: Prediction probabilities for prolonged length of stay.
-                - readmission_proba: Prediction probabilities for readmission.
-    :rtype: pandas.DataFrame
-    """
+  :return: DataFrame with the following columns:
+              - subject_id: Subject IDs, which in some cases can be different due to your analysis.
+              - mortality_proba: Prediction probabilities for mortality.
+              - prolonged_LOS_proba: Prediction probabilities for prolonged length of stay.
+              - readmission_proba: Prediction probabilities for readmission.
+  :rtype: pandas.DataFrame
+  """
   try:
-      predictions = inferance_query(subject_ids, client)
+      predictions = inferance_query(subject_ids, con)
       
       results_df = pd.DataFrame({
           'subject_id': subject_ids[:len(predictions[0])],  
