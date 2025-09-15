@@ -297,7 +297,6 @@ def inferance_query(subject_ids, con):
     dataloader = DataLoader(dataset, batch_size=128, shuffle=False)
 
     # Perform inference
-    y = pd.read_csv(r"./data/y_test.csv")
     res = model.validate(dataloader, dataset, return_predictions=True, labels_exist=False)
     return res
 
