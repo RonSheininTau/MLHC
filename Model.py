@@ -170,7 +170,7 @@ class GraphGRUMortalityModel(nn.Module):
 
     def initialize_calibrator(self, true_labels = None, raw_predictions = None):
         print("initializing calibrator")
-        self.calibrator = [LogisticRegressionCV(solver="lbfgs") for _ in range(len(raw_predictions))]
+        self.calibrator = [LogisticRegression(solver="lbfgs") for _ in range(len(raw_predictions))]
         for i in range(len(raw_predictions)):
             self.calibrator[i].fit(raw_predictions[i].reshape(-1, 1), true_labels[i])
 
