@@ -12,6 +12,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import duckdb
+import gdown
 # from NoteEmbedder import embed_long_texts
 sys.modules["numpy._core.numeric"] = np.core.numeric  
 os.environ['OPENBLAS_NUM_THREADS'] = '16'
@@ -139,6 +140,47 @@ def load_data(path = r"./data"):
         hosps[col] = pd.to_datetime(hosps[col].str.strip(), errors='coerce')
     
     return subject_ids, lab_event_metadata, vital_metadata, labs, vits, hosps
+
+def donwload_data(path=r'./data'):
+    if not os.path.exists(path):
+        try:
+            print(f"Downloading data to {path}")
+            os.makedirs(path, exist_ok=True)
+            download_url = f'https://drive.google.com/uc?id=1pT9iDdDWP1PbOEt1I2xtBF8oOlZQLtDq'
+            output_path = os.path.join(path, 'icu.csv')
+
+            gdown.download(download_url, output_path, quiet=False)
+            download_url = f'https://drive.google.com/uc?id=18t5EUNKtMtfz9YMdF1xkFfRxuUXpPlNb'
+            output_path = os.path.join(path, 'labs.csv')
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=1zyF_FavDyTYu1URNf81d6-aVcrJmj_lT'
+            output_path = os.path.join(path, 'vits.csv')
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=1Q4uCqN4XjoqAp5wnpLsTsIrayLSrGPVZ'
+            output_path = os.path.join(path, 'notes_with_embeddings_fast.pkl')
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=1Le3FtXqfiWi03CRe8dEH2ySolkYQkLQ1'
+            output_path = os.path.join(path, 'prescriptions.csv')
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=1wrlUCGZr8Gib17CbC4nLRG42xCtE783o'
+            output_path = os.path.join(path, 'bios.csv')
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=1pr3APIiwTALAA5jSMyFgkzG5GOYwJ8DE'
+            output_path = f'{td}/lab_metadata.csv'
+            gdown.download(download_url, output_path, quiet=False)
+
+            download_url = f'https://drive.google.com/uc?id=11Jq0OrfC8JQou3ngA0puMptUHYqw546I'
+            output_path = f'{td}/vital_metadata.csv'
+            gdown.download(download_url, output_path, quiet=False)
+
+        except Exception as e:
+            print(f"Error downloading data: {e}")
+
 
 def create_labels(hosps):
     """
@@ -499,9 +541,10 @@ def generate_series_data(df, group_col="subject_id", maxlen=18):
   padding_mask = torch.tensor(padding_mask, dtype=torch.float32)
   return padded_tensor, padding_mask
 
-
+        
 def preprocess_pipeline(path=r'./data', num_clusters=240, scale_meta_features=SCALE_META_FEATURES):
 
+    donwload_data(path)
     subject_ids, lab_event_metadata, vital_metadata, labs, vits, hosps = load_data(path)
     labels_df = create_labels(hosps)
     hosps = ethnicity_to_ohe(hosps)
