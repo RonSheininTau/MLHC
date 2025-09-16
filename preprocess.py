@@ -146,6 +146,11 @@ def donwload_data(path=r'./data'):
         try:
             print(f"Downloading data to {path}")
             os.makedirs(path, exist_ok=True)
+            download_url = f'https://drive.google.com/uc?id=1XSVAyXZKdlq91v9t3xCNJ0joIa5568vH'
+            output_path = os.path.join(path, 'initial_cohort.csv')
+            gdown.download(download_url, output_path, quiet=False)
+
+            os.makedirs(path, exist_ok=True)
             download_url = f'https://drive.google.com/uc?id=1pT9iDdDWP1PbOEt1I2xtBF8oOlZQLtDq'
             output_path = os.path.join(path, 'icu.csv')
 
