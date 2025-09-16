@@ -146,6 +146,7 @@ def donwload_data(path=r'./data'):
         try:
             print(f"Downloading data to {path}")
             os.makedirs(path, exist_ok=True)
+
             download_url = f'https://drive.google.com/uc?id=1XSVAyXZKdlq91v9t3xCNJ0joIa5568vH'
             output_path = os.path.join(path, 'initial_cohort.csv')
             gdown.download(download_url, output_path, quiet=False)
@@ -176,11 +177,11 @@ def donwload_data(path=r'./data'):
             gdown.download(download_url, output_path, quiet=False)
 
             download_url = f'https://drive.google.com/uc?id=1pr3APIiwTALAA5jSMyFgkzG5GOYwJ8DE'
-            output_path = f'{td}/lab_metadata.csv'
+            output_path = os.path.join(path, 'lab_metadata.csv')
             gdown.download(download_url, output_path, quiet=False)
 
             download_url = f'https://drive.google.com/uc?id=11Jq0OrfC8JQou3ngA0puMptUHYqw546I'
-            output_path = f'{td}/vital_metadata.csv'
+            output_path = os.path.join(path, 'vital_metadata.csv')
             gdown.download(download_url, output_path, quiet=False)
 
         except Exception as e:
