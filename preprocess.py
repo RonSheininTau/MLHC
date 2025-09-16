@@ -164,7 +164,7 @@ def donwload_data(path=r'./data'):
             output_path = os.path.join(path, 'vits.csv')
             gdown.download(download_url, output_path, quiet=False)
 
-            download_url = f'https://drive.google.com/uc?id=1Q4uCqN4XjoqAp5wnpLsTsIrayLSrGPVZ'
+            download_url = f'https://drive.google.com/uc?id=1rJ8ZS5DD8TUe_xeBmV-OhACGFiEAwr59'
             output_path = os.path.join(path, 'notes_with_embeddings_fast.pkl')
             gdown.download(download_url, output_path, quiet=False)
 
