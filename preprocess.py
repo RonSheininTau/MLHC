@@ -177,7 +177,7 @@ def donwload_data(path=r'./data'):
             gdown.download(download_url, output_path, quiet=False)
 
             download_url = f'https://drive.google.com/uc?id=1pr3APIiwTALAA5jSMyFgkzG5GOYwJ8DE'
-            output_path = os.path.join(path, 'lab_metadata.csv')
+            output_path = os.path.join(path, 'labs_metadata.csv')
             gdown.download(download_url, output_path, quiet=False)
 
             download_url = f'https://drive.google.com/uc?id=11Jq0OrfC8JQou3ngA0puMptUHYqw546I'
