@@ -1,4 +1,4 @@
-name: HML
+name: mlhc_project
 channels:
   - defaults
 dependencies:
