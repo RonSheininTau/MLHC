@@ -508,7 +508,14 @@ def process_bios(merged, bios=None, path='data/bios.csv', threshold=240, orgs=No
     groupby_cols = ['subject_id', 'hadm_id']
     onehot_cols = [col for col in bios_onehot.columns if col.startswith('org_')]
     bios_table = bios_onehot.groupby(groupby_cols)[onehot_cols].sum().reset_index().drop("hadm_id", axis=1).set_index("subject_id")
-
+    # Add columns of 0 for missing orgs so all orgs are present as columns
+    if orgs is not None:
+        all_orgs = ["org_" + str(org) for org in orgs]
+        for col in all_orgs:
+            if col not in bios_table.columns:
+                bios_table[col] = 0
+        # Ensure columns are in a consistent order
+        bios_table = bios_table.reindex(columns=all_orgs + ['org_None'])
     return bios_table
 
 def process_prescriptions(merged, prescriptions=None, path='data/prescriptions.csv', threshold=240, drugs=None):
